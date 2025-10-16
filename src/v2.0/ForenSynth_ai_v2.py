@@ -2,24 +2,31 @@
 # ForenSynth AI v2.0 — DFIR Intelligence Engine
 from __future__ import annotations
 
-import argparse, json, math, os, re, shutil, subprocess, sys, time, random, threading
+import argparse
+import json
+import math
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from typing import Any, Dict, List, Optional, Tuple
+
+import pypandoc
 
 # External libs
 import tiktoken
-import pypandoc
 from dotenv import load_dotenv
-from openai import OpenAI
-from openai import APIError, APIConnectionError, RateLimitError, BadRequestError, APITimeoutError
-
+from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 
 console = Console()
 
@@ -28,7 +35,7 @@ console = Console()
 # ─────────────────────────────────────────────────────────────────────────────
 PRICING = {
     "gpt-5-mini": {"in": 0.00025, "out": 0.00200},
-    "gpt-5":      {"in": 0.00125, "out": 0.01000},
+    "gpt-5": {"in": 0.00125, "out": 0.01000},
     "gpt-4o-mini": {"in": 0.00015, "out": 0.00060},  # optional alt
 }
 
@@ -172,6 +179,7 @@ class MatrixController extends Chart.DatasetController{initialize(){super.initia
 MatrixController.id="matrix";MatrixController.defaults={dataElementType: 'rectangle'};Chart.register(MatrixController);
 """
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
 class AppConfig:
@@ -200,35 +208,57 @@ class AppConfig:
     llm_retries: int
     temperature: float
 
-def ok(msg): console.print(Panel.fit(f"[green]✔ {msg}[/green]"))
-def info(msg): console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]"))
-def die(msg): console.print(Panel.fit(f"[red]✘ {msg}[/red]")); sys.exit(1)
+
+def ok(msg):
+    console.print(Panel.fit(f"[green]✔ {msg}[/green]"))
+
+
+def info(msg):
+    console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]"))
+
+
+def die(msg):
+    console.print(Panel.fit(f"[red]✘ {msg}[/red]"))
+    sys.exit(1)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def get_encoder():
-    try: return tiktoken.get_encoding("cl100k_base")
-    except Exception: return tiktoken.get_encoding("cl100k_base")
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return tiktoken.get_encoding("cl100k_base")
 
-def est_tokens(enc, text): 
-    try: return len(enc.encode(text))
-    except Exception: return math.ceil(len(text)/4)
+
+def est_tokens(enc, text):
+    try:
+        return len(enc.encode(text))
+    except Exception:
+        return math.ceil(len(text) / 4)
+
 
 def chunk_list(lst, n):
-    for i in range(0, len(lst), n): yield lst[i:i+n]
+    for i in range(0, len(lst), n):
+        yield lst[i : i + n]
+
 
 def now_utc_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00","Z")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chainsaw
 # ─────────────────────────────────────────────────────────────────────────────
 def find_latest_container(root: Path) -> Path:
-    if not root.exists(): die(f"EVTX root not found: {root}")
+    if not root.exists():
+        die(f"EVTX root not found: {root}")
     ds = [p for p in root.iterdir() if p.is_dir()]
-    if not ds: die(f"No subfolders under {root}")
+    if not ds:
+        die(f"No subfolders under {root}")
     return max(ds, key=lambda p: p.stat().st_mtime)
+
 
 def resolve_evtx_source(root: Path, prefer_logs: List[str]) -> Tuple[Path, Optional[Path]]:
     latest = find_latest_container(root)
@@ -236,19 +266,33 @@ def resolve_evtx_source(root: Path, prefer_logs: List[str]) -> Tuple[Path, Optio
     # choose file if preferred exists
     for name in prefer_logs:
         p = latest / name
-        if p.is_file(): 
+        if p.is_file():
             ok(f"Selected log file: {name}")
             return latest, p
     return latest, None
 
-def run_chainsaw(src_dir: Path, out_json: Path, rules: Path, mapping: Path, single_file: Optional[Path]=None) -> Tuple[int, List[str]]:
+
+def run_chainsaw(
+    src_dir: Path, out_json: Path, rules: Path, mapping: Path, single_file: Optional[Path] = None
+) -> Tuple[int, List[str]]:
     console.print(Panel.fit("🪓 Chainsaw Module Active — Sigma Hunt in Progress…"))
-    cmd = ["chainsaw", "hunt", str(single_file or src_dir),
-           "--mapping", str(mapping),
-           "--rule", str(rules),
-           "-s", str(rules.parent),
-           "--json", "--output", str(out_json)]
-    with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn(), transient=True) as prog:
+    cmd = [
+        "chainsaw",
+        "hunt",
+        str(single_file or src_dir),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules),
+        "-s",
+        str(rules.parent),
+        "--json",
+        "--output",
+        str(out_json),
+    ]
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn(), transient=True
+    ) as prog:
         task = prog.add_task("hunt", total=None)
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -264,65 +308,82 @@ def run_chainsaw(src_dir: Path, out_json: Path, rules: Path, mapping: Path, sing
     ok("Chainsaw hunt completed. Detections: {}".format(dets if dets else "?"))
     return dets, cmd
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Detections parsing + prompts
 # ─────────────────────────────────────────────────────────────────────────────
-def load_detections(path: Path, max_items: int) -> List[Dict[str,Any]]:
+def load_detections(path: Path, max_items: int) -> List[Dict[str, Any]]:
     text = path.read_text(encoding="utf-8")
     obj = json.loads(text)
-    if not isinstance(obj, list): raise RuntimeError("Unexpected Chainsaw JSON (expected list).")
-    if max_items>0: obj = obj[:max_items]
+    if not isinstance(obj, list):
+        raise RuntimeError("Unexpected Chainsaw JSON (expected list).")
+    if max_items > 0:
+        obj = obj[:max_items]
     return obj
 
-def detection_timestamp_iso(det: Dict[str,Any]) -> Optional[str]:
+
+def detection_timestamp_iso(det: Dict[str, Any]) -> Optional[str]:
     try:
         return det["document"]["data"]["Event"]["System"]["TimeCreated_attributes"]["SystemTime"]
     except Exception:
         return det.get("timestamp")
 
-def build_micro_prompt(block: List[Dict[str,Any]], include_script: bool, micro_trunc: int)->str:
-    header=("Micro-summarize for DFIR triage in <= 10 bullets total. "
-            "Group similar items, name key TTPs (MITRE IDs if present), counts/timestamps if available. "
-            "Output:\n• Executive bullets\n• Key TTPs\n• Notable IOCs\n")
-    parts=[]
+
+def build_micro_prompt(block: List[Dict[str, Any]], include_script: bool, micro_trunc: int) -> str:
+    header = (
+        "Micro-summarize for DFIR triage in <= 10 bullets total. "
+        "Group similar items, name key TTPs (MITRE IDs if present), counts/timestamps if available. "
+        "Output:\n• Executive bullets\n• Key TTPs\n• Notable IOCs\n"
+    )
+    parts = []
     for d in block:
         ts = detection_timestamp_iso(d) or "N/A"
-        rule = d.get("name","N/A")
-        tags = ", ".join(d.get("tags",[]) or []) or "None"
-        snippet=""
-        if include_script and micro_trunc>0:
-            script = (((d.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData",{}).get("ScriptBlockText","")
-            if isinstance(script,str) and script:
-                snippet = script[:micro_trunc] + ("… [truncated]" if len(script)>micro_trunc else "")
-        line=f"- [{ts}] {rule} (Tags: {tags})"
-        if snippet: line += f" | snippet: {snippet}"
+        rule = d.get("name", "N/A")
+        tags = ", ".join(d.get("tags", []) or []) or "None"
+        snippet = ""
+        if include_script and micro_trunc > 0:
+            script = (
+                (((d.get("document") or {}).get("data") or {}).get("Event") or {})
+                .get("EventData", {})
+                .get("ScriptBlockText", "")
+            )
+            if isinstance(script, str) and script:
+                snippet = script[:micro_trunc] + ("… [truncated]" if len(script) > micro_trunc else "")
+        line = f"- [{ts}] {rule} (Tags: {tags})"
+        if snippet:
+            line += f" | snippet: {snippet}"
         parts.append(line)
-    return header+"\n".join(parts)
+    return header + "\n".join(parts)
+
 
 def build_final_prompt(micros: List[str]) -> str:
-    return ("Merge the following micro-summaries into a single executive DFIR report.\n"
-            "Eliminate duplicates, group themes, and produce:\n"
-            "1) Executive Summary\n2) Observed Activity (grouped)\n3) Key TTPs/Techniques\n"
-            "4) Indicators of Compromise\n5) Actionable Recommendations (High/Med/Low)\n\n"
-            + "\n\n---\n\n".join(micros))
+    return (
+        "Merge the following micro-summaries into a single executive DFIR report.\n"
+        "Eliminate duplicates, group themes, and produce:\n"
+        "1) Executive Summary\n2) Observed Activity (grouped)\n3) Key TTPs/Techniques\n"
+        "4) Indicators of Compromise\n5) Actionable Recommendations (High/Med/Low)\n\n" + "\n\n---\n\n".join(micros)
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM
 # ─────────────────────────────────────────────────────────────────────────────
-def backoff_sleep(i: int): time.sleep(min(30.0, (1.5**i)+random.uniform(0,0.3)))
+def backoff_sleep(i: int):
+    time.sleep(min(30.0, (1.5**i) + random.uniform(0, 0.3)))
 
-def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
-             temperature: float, timeout_s: int, retries: int)->str:
+
+def call_llm(
+    client: OpenAI, model: str, system_prompt: str, user_prompt: str, temperature: float, timeout_s: int, retries: int
+) -> str:
     safe_temp = 1.0 if model.startswith("gpt-5") else temperature
-    last=None
+    last = None
     for i in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=model,
-                messages=[{"role":"system","content":system_prompt},
-                          {"role":"user","content":user_prompt}],
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=safe_temp,
-                timeout=timeout_s
+                timeout=timeout_s,
             )
             return resp.choices[0].message.content or ""
         except BadRequestError as e:
@@ -331,48 +392,54 @@ def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
                 continue
             raise
         except (RateLimitError, APIConnectionError, APITimeoutError, APIError) as e:
-            last=e; backoff_sleep(i); continue
+            last = e
+            backoff_sleep(i)
+            continue
     raise RuntimeError(f"LLM retries exceeded: {last}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Heatmap (hourly)
 # ─────────────────────────────────────────────────────────────────────────────
-def build_heatmap(dets: List[Dict[str,Any]]) -> Dict[str,Any]:
-    times=[]
+def build_heatmap(dets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    times = []
     for d in dets:
         ts = detection_timestamp_iso(d)
-        if not ts: continue
+        if not ts:
+            continue
         try:
-            dt = datetime.fromisoformat(ts.replace("Z","+00:00"))
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         except Exception:
             continue
         times.append(dt.astimezone(timezone.utc))
     if not times:
-        return {"labels":[],"values":[],"w":24,"h":1,"max":0}
+        return {"labels": [], "values": [], "w": 24, "h": 1, "max": 0}
     # map day index + hour
     base_day = min(t.date() for t in times)
-    idx = lambda t: (t.date()-base_day).days
-    buckets={}
-    maxv=0
+    idx = lambda t: (t.date() - base_day).days
+    buckets = {}
+    maxv = 0
     for t in times:
-        key=(idx(t), t.hour)
-        buckets[key]=buckets.get(key,0)+1
-        maxv=max(maxv,buckets[key])
-    h = (max(k[0] for k in buckets.keys())+1) if buckets else 1
+        key = (idx(t), t.hour)
+        buckets[key] = buckets.get(key, 0) + 1
+        maxv = max(maxv, buckets[key])
+    h = (max(k[0] for k in buckets.keys()) + 1) if buckets else 1
     w = 24
-    values=[{"x":hr,"y":day,"v":buckets.get((day,hr),0)} for day in range(h) for hr in range(w)]
-    return {"labels":[],"values":values,"w":w,"h":h,"max":maxv}
+    values = [{"x": hr, "y": day, "v": buckets.get((day, hr), 0)} for day in range(h) for hr in range(w)]
+    return {"labels": [], "values": values, "w": w, "h": h, "max": maxv}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IOC extraction (simple regex)
 # ─────────────────────────────────────────────────────────────────────────────
-RE_IP  = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 RE_DOM = re.compile(r"\b[a-zA-Z0-9.-]+\.(?:com|net|org|co|io|dev|gov|mil|edu|info|biz|ru|cn|uk|de|jp)\b", re.I)
 RE_MD5 = re.compile(r"\b[a-f0-9]{32}\b", re.I)
-RE_SHA1= re.compile(r"\b[a-f0-9]{40}\b", re.I)
-RE_SHA256=re.compile(r"\b[a-f0-9]{64}\b", re.I)
+RE_SHA1 = re.compile(r"\b[a-f0-9]{40}\b", re.I)
+RE_SHA256 = re.compile(r"\b[a-f0-9]{64}\b", re.I)
 
-def ioc_from_text(txt:str)->Dict[str,set]:
+
+def ioc_from_text(txt: str) -> Dict[str, set]:
     return {
         "ip": set(RE_IP.findall(txt)),
         "domain": set(RE_DOM.findall(txt)),
@@ -381,50 +448,68 @@ def ioc_from_text(txt:str)->Dict[str,set]:
         "sha256": set(RE_SHA256.findall(txt)),
     }
 
-def aggregate_iocs(dets: List[Dict[str,Any]])->Dict[str,set]:
-    acc={"ip":set(),"domain":set(),"md5":set(),"sha1":set(),"sha256":set()}
+
+def aggregate_iocs(dets: List[Dict[str, Any]]) -> Dict[str, set]:
+    acc = {"ip": set(), "domain": set(), "md5": set(), "sha1": set(), "sha256": set()}
     for d in dets:
         data = json.dumps(d, ensure_ascii=False)
-        found=ioc_from_text(data)
-        for k in acc: acc[k].update(found[k])
+        found = ioc_from_text(data)
+        for k in acc:
+            acc[k].update(found[k])
     return acc
 
-def ioc_html_table(iocs: Dict[str,set])->str:
-    rows=[]
-    for k in ["ip","domain","md5","sha1","sha256"]:
-        vals=sorted(iocs[k])[:300]
-        if not vals: continue
-        rows.append(f"<tr><th>{k.upper()}</th><td><div class='code'>{'<br>'.join(map(str,vals))}</div></td></tr>")
-    return "<table>"+("".join(rows) if rows else "<tr><td>No IOCs detected from text extraction.</td></tr>")+"</table>"
+
+def ioc_html_table(iocs: Dict[str, set]) -> str:
+    rows = []
+    for k in ["ip", "domain", "md5", "sha1", "sha256"]:
+        vals = sorted(iocs[k])[:300]
+        if not vals:
+            continue
+        rows.append(f"<tr><th>{k.upper()}</th><td><div class='code'>{'<br>'.join(map(str, vals))}</div></td></tr>")
+    return (
+        "<table>" + ("".join(rows) if rows else "<tr><td>No IOCs detected from text extraction.</td></tr>") + "</table>"
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Reports + CSV log
 # ─────────────────────────────────────────────────────────────────────────────
-def write_html(outdir: Path, html: str)->Path:
+def write_html(outdir: Path, html: str) -> Path:
     out = outdir / f"forensynth_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.html"
     out.write_text(html, encoding="utf-8")
     return out
 
-def write_md(outdir: Path, md: str)->Path:
+
+def write_md(outdir: Path, md: str) -> Path:
     out = outdir / f"forensynth_summary_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.md"
     out.write_text(md, encoding="utf-8")
     return out
 
-def write_csv_runlog(root: Path, row: Dict[str,Any]):
+
+def write_csv_runlog(root: Path, row: Dict[str, Any]):
     path = root / "run_log.csv"
-    rows=[]
+    rows = []
     if path.exists():
         for ln in path.read_text(encoding="utf-8").splitlines():
             if ln.strip() and not ln.startswith("timestamp,"):
                 parts = ln.split(",")
                 rows.append(parts)
     # add new
-    rows.append([row["timestamp"], str(row["detections"]), str(row["runtime_sec"]),
-                 f"{row['cost_usd']:.6f}", row["integrity"], row["chunk_model"], row["final_model"]])
+    rows.append(
+        [
+            row["timestamp"],
+            str(row["detections"]),
+            str(row["runtime_sec"]),
+            f"{row['cost_usd']:.6f}",
+            row["integrity"],
+            row["chunk_model"],
+            row["final_model"],
+        ]
+    )
     # sort desc by timestamp
     rows.sort(key=lambda r: r[0], reverse=True)
     # write
-    head="timestamp,detections,runtime_sec,cost_usd,integrity,chunk_model,final_model\n"
+    head = "timestamp,detections,runtime_sec,cost_usd,integrity,chunk_model,final_model\n"
     path.write_text(head + "\n".join(",".join(r) for r in rows), encoding="utf-8")
 
     # Pretty print last 5
@@ -441,52 +526,61 @@ def write_csv_runlog(root: Path, row: Dict[str,Any]):
     console.print(t)
     return path
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Two-pass summarization with live progress
 # ─────────────────────────────────────────────────────────────────────────────
-def two_pass(client: OpenAI, dets: List[Dict[str,Any]], cfg: AppConfig) -> Tuple[str, Dict[str,Tuple[int,int]]]:
-    enc=get_encoder()
+def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+    enc = get_encoder()
     # chunk
-    blocks=list(chunk_list(dets, cfg.chunk_size))
-    micros=[""]*len(blocks)
-    usage: Dict[str,Tuple[int,int]] = {}
-    micro_in=micro_out=0
+    blocks = list(chunk_list(dets, cfg.chunk_size))
+    micros = [""] * len(blocks)
+    usage: Dict[str, Tuple[int, int]] = {}
+    micro_in = micro_out = 0
 
     console.print(Panel.fit("Detections found ({}) — generating micro-summaries…".format(len(dets))))
     with Progress(
         TextColumn("[bold]Micro[/bold]"), BarColumn(), TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn()
     ) as prog:
         task = prog.add_task("micro", total=len(blocks))
-        def work(i:int, blk:List[Dict[str,Any]]):
-            prompt=build_micro_prompt(blk, cfg.micro_include_script, cfg.micro_truncate)
+
+        def work(i: int, blk: List[Dict[str, Any]]):
+            prompt = build_micro_prompt(blk, cfg.micro_include_script, cfg.micro_truncate)
             tin = est_tokens(enc, DEFAULT_SYSTEM) + est_tokens(enc, prompt)
-            txt = call_llm(client, cfg.chunk_model, DEFAULT_SYSTEM, prompt, cfg.temperature, cfg.llm_timeout, cfg.llm_retries)
+            txt = call_llm(
+                client, cfg.chunk_model, DEFAULT_SYSTEM, prompt, cfg.temperature, cfg.llm_timeout, cfg.llm_retries
+            )
             tout = est_tokens(enc, txt)
             return i, txt, tin, tout
-        futures=[]
-        max_workers=max(1,cfg.micro_workers)
+
+        futures = []
+        max_workers = max(1, cfg.micro_workers)
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             for i, blk in enumerate(blocks):
                 futures.append(ex.submit(work, i, blk))
             for f in as_completed(futures):
                 i, txt, tin, tout = f.result()
-                micros[i]=f"### Micro {i+1}\n\n{txt}\n"
-                micro_in+=tin; micro_out+=tout
+                micros[i] = f"### Micro {i + 1}\n\n{txt}\n"
+                micro_in += tin
+                micro_out += tout
                 prog.update(task, advance=1)
 
-    usage[cfg.chunk_model]=(micro_in, micro_out)
+    usage[cfg.chunk_model] = (micro_in, micro_out)
 
     # final merge
     console.print(Panel.fit("Compiling executive summary with final model…"))
-    user=build_final_prompt(micros)
-    fin_in = est_tokens(enc, FINAL_SYSTEM)+est_tokens(enc, user)
+    user = build_final_prompt(micros)
+    fin_in = est_tokens(enc, FINAL_SYSTEM) + est_tokens(enc, user)
     final = call_llm(client, cfg.final_model, FINAL_SYSTEM, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries)
     fin_out = est_tokens(enc, final)
-    usage[cfg.final_model]=(usage.get(cfg.final_model,(0,0))[0]+fin_in,
-                           usage.get(cfg.final_model,(0,0))[1]+fin_out)
+    usage[cfg.final_model] = (
+        usage.get(cfg.final_model, (0, 0))[0] + fin_in,
+        usage.get(cfg.final_model, (0, 0))[1] + fin_out,
+    )
 
     md = "# Final Executive Report\n\n" + final + "\n\n---\n\n## Appendix: Micro-Summaries\n\n" + "\n".join(micros)
     return md, usage
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML assembly
@@ -495,23 +589,44 @@ def as_html(md: str) -> str:
     try:
         return pypandoc.convert_text(md, to="html", format="gfm")
     except Exception:
-        return "<pre class='code'>Pandoc not available; showing Markdown:</pre><div class='code'>"+md.replace("<","&lt;")+"</div>"
+        return (
+            "<pre class='code'>Pandoc not available; showing Markdown:</pre><div class='code'>"
+            + md.replace("<", "&lt;")
+            + "</div>"
+        )
 
-def assemble_html(final_html: str, micros_html: str, ioc_html: str, heat_json: Dict[str,Any],
-                  det_count:int, chunk_model:str, final_model:str, runtime:int, cost:float,
-                  start_utc:str, end_utc:str, branding:str, toc_on:bool)->str:
-    branding_html = "" if branding=="off" else "<div class='footer'>Powered by ForenSynth AI™</div>"
-    toc_html = "" if not toc_on else (
-        "<div class='card toc'><h2>Index</h2>"
-        "<a href='#exec'>Executive Summary</a>"
-        "<a href='#heatmap'>Detections Heatmap</a>"
-        "<a href='#ioc'>Indicators of Compromise</a>"
-        "<a href='#appendix'>Appendix: Micro-Summaries</a></div>"
+
+def assemble_html(
+    final_html: str,
+    micros_html: str,
+    ioc_html: str,
+    heat_json: Dict[str, Any],
+    det_count: int,
+    chunk_model: str,
+    final_model: str,
+    runtime: int,
+    cost: float,
+    start_utc: str,
+    end_utc: str,
+    branding: str,
+    toc_on: bool,
+) -> str:
+    branding_html = "" if branding == "off" else "<div class='footer'>Powered by ForenSynth AI™</div>"
+    toc_html = (
+        ""
+        if not toc_on
+        else (
+            "<div class='card toc'><h2>Index</h2>"
+            "<a href='#exec'>Executive Summary</a>"
+            "<a href='#heatmap'>Detections Heatmap</a>"
+            "<a href='#ioc'>Indicators of Compromise</a>"
+            "<a href='#appendix'>Appendix: Micro-Summaries</a></div>"
+        )
     )
     return HTML_TEMPLATE.format(
         css=HTML_CSS,
         stamp=start_utc,
-        human_stamp=start_utc.replace("T"," "),
+        human_stamp=start_utc.replace("T", " "),
         det_count=det_count,
         chunk_model=chunk_model,
         final_model=final_model,
@@ -523,39 +638,43 @@ def assemble_html(final_html: str, micros_html: str, ioc_html: str, heat_json: D
         final_html=final_html,
         micros_html=micros_html,
         ioc_html=ioc_html,
-        chart_js="const Chart=window.Chart;"+CHART_JS_MIN, # minimal embed; assumes Chart already available
+        chart_js="const Chart=window.Chart;" + CHART_JS_MIN,  # minimal embed; assumes Chart already available
         heatmap_json=json.dumps(heat_json),
-        chart_w="ctx", chart_h="ctx",
-        toc_html=toc_html
+        chart_w="ctx",
+        chart_h="ctx",
+        toc_html=toc_html,
     )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cost
 # ─────────────────────────────────────────────────────────────────────────────
-def estimate_cost(usage: Dict[str,Tuple[int,int]])->Tuple[float,List[str]]:
-    total=0.0; lines=[]
-    for m,(tin,tout) in usage.items():
-        price = PRICING.get(m, {"in":0,"out":0})
-        cost = (tin/1000.0)*price["in"] + (tout/1000.0)*price["out"]
+def estimate_cost(usage: Dict[str, Tuple[int, int]]) -> Tuple[float, List[str]]:
+    total = 0.0
+    lines = []
+    for m, (tin, tout) in usage.items():
+        price = PRICING.get(m, {"in": 0, "out": 0})
+        cost = (tin / 1000.0) * price["in"] + (tout / 1000.0) * price["out"]
         total += cost
         lines.append(f"- {m}: in={tin}, out={tout} → ${cost:.6f} (in {price['in']}/k, out {price['out']}/k)")
-    return round(total,6), lines
+    return round(total, 6), lines
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI / Main
 # ─────────────────────────────────────────────────────────────────────────────
-def parse_args()->AppConfig:
-    p=argparse.ArgumentParser(description="ForenSynth AI v2.0 — DFIR Intelligence Engine")
+def parse_args() -> AppConfig:
+    p = argparse.ArgumentParser(description="ForenSynth AI v2.0 — DFIR Intelligence Engine")
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--fast", action="store_true")
     p.add_argument("--make-html", action="store_true")
-    p.add_argument("--branding", choices=["on","off"], default="on")
-    p.add_argument("--toc", choices=["on","off"], default="off")
+    p.add_argument("--branding", choices=["on", "off"], default="on")
+    p.add_argument("--toc", choices=["on", "off"], default="off")
 
     p.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
-    p.add_argument("--out-root", type=Path, default=Path.home()/ "DFIR-Labs" / "ForenSynth" / "Reports")
-    p.add_argument("--rules", type=Path, default=Path.home()/ "tools" / "sigma" / "rules")
-    p.add_argument("--mapping", type=Path, default=Path.home()/ "tools" / "chainsaw" / "sigma-event-logs-all.yml")
+    p.add_argument("--out-root", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
+    p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
+    p.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
     p.add_argument("--prefer-logs", type=str, default="PowerShell-Operational.evtx,Security.evtx")
 
     p.add_argument("--chunk-model", default=DEFAULT_CHUNK_MODEL)
@@ -571,29 +690,45 @@ def parse_args()->AppConfig:
     p.add_argument("--llm-max-retries", type=int, default=6)
     p.add_argument("--llm-temperature", type=float, default=0)
 
-    a=p.parse_args()
+    a = p.parse_args()
     return AppConfig(
-        two_pass=a.two_pass, fast=a.fast, make_html=a.make_html, branding=a.branding, toc=a.toc,
-        evtx_root=a.evtx_root, out_root=a.out_root, rules_dir=a.rules, mapping_path=a.mapping,
+        two_pass=a.two_pass,
+        fast=a.fast,
+        make_html=a.make_html,
+        branding=a.branding,
+        toc=a.toc,
+        evtx_root=a.evtx_root,
+        out_root=a.out_root,
+        rules_dir=a.rules,
+        mapping_path=a.mapping,
         prefer_logs=[s.strip() for s in a.prefer_logs.split(",") if s.strip()],
-        chunk_model=a.chunk_model, final_model=a.final_model, chunk_size=max(1,a.chunk_size),
-        max_chunks=max(1,a.max_chunks), max_input_tokens=max(1000,a.max_input_tokens),
-        micro_truncate=max(0,a.micro_truncate), micro_include_script=a.micro_include_script,
-        rpm=max(0,a.rpm), micro_workers=max(1,a.micro_workers), llm_timeout=max(15,a.llm_timeout),
-        llm_retries=max(1,a.llm_max_retries), temperature=a.llm_temperature
+        chunk_model=a.chunk_model,
+        final_model=a.final_model,
+        chunk_size=max(1, a.chunk_size),
+        max_chunks=max(1, a.max_chunks),
+        max_input_tokens=max(1000, a.max_input_tokens),
+        micro_truncate=max(0, a.micro_truncate),
+        micro_include_script=a.micro_include_script,
+        rpm=max(0, a.rpm),
+        micro_workers=max(1, a.micro_workers),
+        llm_timeout=max(15, a.llm_timeout),
+        llm_retries=max(1, a.llm_max_retries),
+        temperature=a.llm_temperature,
     )
+
 
 def main():
     load_dotenv()
-    api_key=os.getenv("OPENAI_API_KEY")
-    if not api_key: die("OPENAI_API_KEY not set")
-    client=OpenAI(api_key=api_key)
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        die("OPENAI_API_KEY not set")
+    client = OpenAI(api_key=api_key)
 
-    cfg=parse_args()
+    cfg = parse_args()
 
     # Boot-up splash (minimal)
     console.rule("🧠 ForenSynth AI — DFIR Intelligence Engine v2.0")
-    if cfg.branding=="off":
+    if cfg.branding == "off":
         console.print(Panel.fit("Clean Report Mode — no branding footer added."))
 
     # Step 1 — Source
@@ -611,20 +746,33 @@ def main():
     det_count, _ = run_chainsaw(src_dir, det_path, cfg.rules_dir, cfg.mapping_path, single_file=single)
 
     # Load detections
-    dets: List[Dict[str,Any]] = []
+    dets: List[Dict[str, Any]] = []
     if det_path.exists():
-        try: dets = load_detections(det_path, max_items=0)
-        except Exception: dets=[]
+        try:
+            dets = load_detections(det_path, max_items=0)
+        except Exception:
+            dets = []
     if not dets:
         console.rule("⚠ No Sigma detections found")
         console.print("No Sigma detections found — skipping summarization to save tokens.")
         # still write placeholder HTML/MD so repo is consistent
-        html = assemble_html("<p>No detections.</p>", "", "<p>None.</p>", {"labels":[],"values":[],"w":24,"h":1,"max":0},
-                             0, cfg.chunk_model, cfg.final_model, 0, 0.0,
-                             start_ts.isoformat().replace("+00:00","Z"), now_utc_iso(),
-                             cfg.branding, cfg.toc=="on")
+        html = assemble_html(
+            "<p>No detections.</p>",
+            "",
+            "<p>None.</p>",
+            {"labels": [], "values": [], "w": 24, "h": 1, "max": 0},
+            0,
+            cfg.chunk_model,
+            cfg.final_model,
+            0,
+            0.0,
+            start_ts.isoformat().replace("+00:00", "Z"),
+            now_utc_iso(),
+            cfg.branding,
+            cfg.toc == "on",
+        )
         html_path = write_html(run_dir, html)
-        md_path   = write_md(run_dir, "# ForenSynth Report\n\nNo detections.")
+        md_path = write_md(run_dir, "# ForenSynth Report\n\nNo detections.")
         ok(f"Empty report written: {html_path}")
         ok(f"Summary MD: {md_path}")
         return
@@ -634,7 +782,7 @@ def main():
     md, usage = two_pass(client, dets, cfg)
 
     # Assemble HTML
-    final_html = as_html(md.split("\n---\n\n## Appendix")[0].replace("# Final Executive Report",""))
+    final_html = as_html(md.split("\n---\n\n## Appendix")[0].replace("# Final Executive Report", ""))
     micros_md = md.split("\n---\n\n## Appendix: Micro-Summaries\n\n")[-1]
     micros_html = as_html(micros_md)
     iocs = aggregate_iocs(dets)
@@ -645,38 +793,55 @@ def main():
     runtime = int((end_ts - start_ts).total_seconds())
     cost, lines = estimate_cost(usage)
 
-    html = assemble_html(final_html, micros_html, ioc_html, heat_json,
-                         len(dets), cfg.chunk_model, cfg.final_model, runtime, cost,
-                         start_ts.isoformat(timespec="seconds").replace("+00:00","Z"),
-                         end_ts.isoformat(timespec="seconds").replace("+00:00","Z"),
-                         cfg.branding, cfg.toc=="on")
+    html = assemble_html(
+        final_html,
+        micros_html,
+        ioc_html,
+        heat_json,
+        len(dets),
+        cfg.chunk_model,
+        cfg.final_model,
+        runtime,
+        cost,
+        start_ts.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        end_ts.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        cfg.branding,
+        cfg.toc == "on",
+    )
 
     html_path = write_html(run_dir, html)
-    md_path   = write_md(run_dir, md)
+    md_path = write_md(run_dir, md)
 
     console.print(Panel.fit(f"Report written: {html_path}"))
     console.print(Panel.fit(f"Summary MD:     {md_path}"))
 
     # Runtime footer
     console.rule("Runtime Summary")
-    console.print(f"Started: {start_ts.isoformat().replace('+00:00','Z')}")
-    console.print(f"Finished: {end_ts.isoformat().replace('+00:00','Z')}")
+    console.print(f"Started: {start_ts.isoformat().replace('+00:00', 'Z')}")
+    console.print(f"Finished: {end_ts.isoformat().replace('+00:00', 'Z')}")
     console.print(f"Total: {runtime}s")
     console.rule("Cost Breakdown")
-    for ln in lines: console.print(ln)
+    for ln in lines:
+        console.print(ln)
     console.print(f"Total cost: ${cost:.6f}")
 
     # Run log (autosort + pretty print last 5)
-    log_path = write_csv_runlog(cfg.out_root, {
-        "timestamp": end_ts.isoformat(timespec="seconds").replace("+00:00","Z"),
-        "detections": len(dets),
-        "runtime_sec": runtime,
-        "cost_usd": cost,
-        "integrity": "off",
-        "chunk_model": cfg.chunk_model.replace("gpt-","5-") if cfg.chunk_model=="gpt-5-mini" else cfg.chunk_model,
-        "final_model": cfg.final_model
-    })
+    log_path = write_csv_runlog(
+        cfg.out_root,
+        {
+            "timestamp": end_ts.isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "detections": len(dets),
+            "runtime_sec": runtime,
+            "cost_usd": cost,
+            "integrity": "off",
+            "chunk_model": cfg.chunk_model.replace("gpt-", "5-")
+            if cfg.chunk_model == "gpt-5-mini"
+            else cfg.chunk_model,
+            "final_model": cfg.final_model,
+        },
+    )
     ok(f"Run logged: {log_path}")
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     main()

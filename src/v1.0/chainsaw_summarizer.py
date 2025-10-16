@@ -1,18 +1,20 @@
 import json
-from pathlib import Path
 from textwrap import dedent
 
 INPUT_FILE = "/home/kali/chainsaw_output/detections.json"
 OUTPUT_FILE = "chainsaw_report.md"
 CHUNK_SIZE = 15  # Split batches (you can change to 10 if needed)
 
+
 def load_detections():
     with open(INPUT_FILE, "r") as f:
         return json.load(f)
 
+
 def chunk_detections(detections, size):
     for i in range(0, len(detections), size):
-        yield detections[i:i + size]
+        yield detections[i : i + size]
+
 
 def summarize_detection(detection):
     title = detection.get("name", "Untitled")
@@ -49,6 +51,7 @@ def summarize_detection(detection):
     """
     return dedent(markdown.strip()) + "\n\n"
 
+
 def write_report(detections, output_path):
     with open(output_path, "w") as out_file:
         out_file.write("# 🔍 Chainsaw Detection Summary\n\n")
@@ -60,6 +63,7 @@ def write_report(detections, output_path):
                 out_file.write(summary)
 
         print(f"[+] Markdown report written to: {output_path}")
+
 
 if __name__ == "__main__":
     detections = load_detections()

@@ -19,9 +19,21 @@ Quick example:
     --chunk-size 30 --llm-timeout 120 --llm-retries 8 \
     --make-html --toc on --branding on --chart-style both --export-evidence-csv
 """
+
 from __future__ import annotations
 
-import argparse, csv, html as _html, json, math, os, random, re, shutil, subprocess, sys, time
+import argparse
+import csv
+import html as _html
+import json
+import math
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -30,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Optional libs
@@ -43,13 +56,11 @@ except Exception:
     pypandoc = None
 
 # OpenAI SDK
-from openai import OpenAI
-from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, RateLimitError
-
+from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -80,14 +91,33 @@ SYSTEM_FINAL = (
 MITRE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b", re.IGNORECASE)
 
 EVENT_WEIGHTS = {  # interesting EIDs
-    "1": 1.2, "3": 1.3, "7": 1.1, "8": 1.1, "10": 1.4, "11": 1.1,
-    "4624": 1.1, "4625": 1.1, "4688": 1.6, "4697": 1.4, "4720": 1.5,
-    "4728": 1.3, "4732": 1.3, "7045": 1.5,
+    "1": 1.2,
+    "3": 1.3,
+    "7": 1.1,
+    "8": 1.1,
+    "10": 1.4,
+    "11": 1.1,
+    "4624": 1.1,
+    "4625": 1.1,
+    "4688": 1.6,
+    "4697": 1.4,
+    "4720": 1.5,
+    "4728": 1.3,
+    "4732": 1.3,
+    "7045": 1.5,
 }
 SEVERITY_TAG_BOOSTS = {
-    "critical": 2.0, "high": 1.6, "medium": 1.3, "suspicious": 1.2,
-    "credential": 1.3, "persistence": 1.4, "lateral": 1.4, "exfil": 1.6, "ransom": 1.8,
+    "critical": 2.0,
+    "high": 1.6,
+    "medium": 1.3,
+    "suspicious": 1.2,
+    "credential": 1.3,
+    "persistence": 1.4,
+    "lateral": 1.4,
+    "exfil": 1.6,
+    "ransom": 1.8,
 }
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # CLI & App State
@@ -134,10 +164,10 @@ def parse_args() -> AppConfig:
     p.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
     p.add_argument("--scope", choices=["dir", "file"], default="dir")
     p.add_argument("--prefer", default="PowerShell-Operational.evtx,Security.evtx")
-    p.add_argument("--rules", type=Path, default=Path.home()/"tools"/"sigma"/"rules")
-    p.add_argument("--mapping", type=Path, default=Path.home()/"tools"/"chainsaw"/"sigma-event-logs-all.yml")
+    p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
+    p.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
     p.add_argument("--sigma-root", type=Path, default=None)
-    p.add_argument("--outdir", type=Path, default=Path.home()/"DFIR-Labs"/"ForenSynth"/"Reports")
+    p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
 
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -163,7 +193,7 @@ def parse_args() -> AppConfig:
     p.add_argument("--rpm", type=int, default=0)
 
     p.add_argument("--export-evidence-csv", action="store_true")
-    p.add_argument("--chart-style", choices=["heatmap","pies","both","off"], default="both")
+    p.add_argument("--chart-style", choices=["heatmap", "pies", "both", "off"], default="both")
 
     a = p.parse_args()
     prefer = [s.strip() for s in a.prefer.split(",") if s.strip()]
@@ -180,43 +210,75 @@ def parse_args() -> AppConfig:
         final_model = "gpt-5"
 
     return AppConfig(
-        evtx_root=a.evtx_root, scope=a.scope, prefer=prefer,
-        rules=a.rules, mapping=a.mapping, sigma_root=a.sigma_root, outdir=a.outdir,
-        two_pass=a.two_pass, make_html=a.make_html, make_pdf=a.make_pdf,
-        toc=(a.toc == "on"), branding=(a.branding == "on"), fast=a.fast,
-        stream=(a.stream == "on"), integrity=(a.integrity == "on"), run_tests=a.run_tests,
+        evtx_root=a.evtx_root,
+        scope=a.scope,
+        prefer=prefer,
+        rules=a.rules,
+        mapping=a.mapping,
+        sigma_root=a.sigma_root,
+        outdir=a.outdir,
+        two_pass=a.two_pass,
+        make_html=a.make_html,
+        make_pdf=a.make_pdf,
+        toc=(a.toc == "on"),
+        branding=(a.branding == "on"),
+        fast=a.fast,
+        stream=(a.stream == "on"),
+        integrity=(a.integrity == "on"),
+        run_tests=a.run_tests,
         max_fidelity=a.max_fidelity,
-        chunk_model=chunk_model, final_model=final_model,
-        llm_timeout=a.llm_timeout, llm_retries=a.llm_retries,
-        temperature=a.temperature, max_input_tokens=max(4000, a.max_input_tokens),
-        chunk_size=max(1, a.chunk_size), max_chunks=max(1, a.max_chunks),
-        micro_workers=workers, rpm=max(0, a.rpm),
-        export_evidence_csv=a.export_evidence_csv, chart_style=a.chart_style,
+        chunk_model=chunk_model,
+        final_model=final_model,
+        llm_timeout=a.llm_timeout,
+        llm_retries=a.llm_retries,
+        temperature=a.temperature,
+        max_input_tokens=max(4000, a.max_input_tokens),
+        chunk_size=max(1, a.chunk_size),
+        max_chunks=max(1, a.max_chunks),
+        micro_workers=workers,
+        rpm=max(0, a.rpm),
+        export_evidence_csv=a.export_evidence_csv,
+        chart_style=a.chart_style,
     )
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Console helpers
 # ────────────────────────────────────────────────────────────────────────────
-def ok(msg: str):   console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
-def info(msg: str): console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
-def warn(msg: str): console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
+def ok(msg: str):
+    console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
+
+
+def info(msg: str):
+    console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
+
+
+def warn(msg: str):
+    console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
+
+
 def die(msg: str):
     console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED))
     sys.exit(1)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Chainsaw integration
 # ────────────────────────────────────────────────────────────────────────────
 def latest_container(root: Path) -> Path:
-    if not root.exists(): die(f"EVTX root not found: {root}")
+    if not root.exists():
+        die(f"EVTX root not found: {root}")
     dirs = [p for p in root.iterdir() if p.is_dir()]
-    if not dirs: die(f"No subfolders under {root}")
+    if not dirs:
+        die(f"No subfolders under {root}")
     return max(dirs, key=lambda p: p.stat().st_mtime)
+
 
 def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]:
     folder = latest_container(root)
     console.print(Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED))
-    if scope == "dir": return "dir", folder
+    if scope == "dir":
+        return "dir", folder
     for name in prefer:
         p = folder / name
         if p.exists():
@@ -228,13 +290,18 @@ def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]
         return "file", any_evtx[0]
     die("No .evtx files found in latest directory")
 
+
 def ensure_chainsaw():
     if shutil.which("chainsaw") is None:
         die("chainsaw not found in PATH")
 
+
 def ensure_paths(rules: Path, mapping: Path):
-    if not rules.exists():  die(f"Sigma rules path not found: {rules}")
-    if not mapping.exists(): die(f"Chainsaw mapping not found: {mapping}")
+    if not rules.exists():
+        die(f"Sigma rules path not found: {rules}")
+    if not mapping.exists():
+        die(f"Chainsaw mapping not found: {mapping}")
+
 
 def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path) -> Path:
     info("Running Chainsaw hunt…")
@@ -244,11 +311,18 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
 
     sigma_root = str((rules.parent if rules.name.lower() == "rules" else rules).resolve())
     cmd = [
-        "chainsaw", "hunt", str(src),
-        "--mapping", str(mapping),
-        "--rule", str(rules),
-        "-s", sigma_root,
-        "--json", "--output", str(out_path)
+        "chainsaw",
+        "hunt",
+        str(src),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules),
+        "-s",
+        sigma_root,
+        "--json",
+        "--output",
+        str(out_path),
     ]
     with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()) as prog:
         task = prog.add_task("hunt", total=None)
@@ -262,11 +336,13 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
     (outdir / "chainsaw_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
     return out_path
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Detections load/normalize
 # ────────────────────────────────────────────────────────────────────────────
 def load_detections(path: Path, cap: int = 0) -> List[Dict[str, Any]]:
-    if not path.exists(): die(f"Detections file not found: {path}")
+    if not path.exists():
+        die(f"Detections file not found: {path}")
     text = path.read_text(encoding="utf-8", errors="ignore")
     try:
         data = json.loads(text)
@@ -275,8 +351,10 @@ def load_detections(path: Path, cap: int = 0) -> List[Dict[str, Any]]:
         for ln in text.splitlines():
             ln = ln.strip()
             if ln:
-                try: data.append(json.loads(ln))
-                except json.JSONDecodeError: pass
+                try:
+                    data.append(json.loads(ln))
+                except json.JSONDecodeError:
+                    pass
     if isinstance(data, dict) and "detections" in data:
         detections = data["detections"]
     elif isinstance(data, list):
@@ -286,6 +364,7 @@ def load_detections(path: Path, cap: int = 0) -> List[Dict[str, Any]]:
     if cap > 0:
         detections = detections[:cap]
     return detections
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Token estimation
@@ -299,19 +378,25 @@ def est_tokens(s: str, model_hint: str = "gpt-4o") -> int:
         return len(enc.encode(s))
     return max(1, math.ceil(len(s) / 4))
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Scoring (smarter selection)
 # ────────────────────────────────────────────────────────────────────────────
 def _extract_event_id(det: Dict[str, Any]) -> str:
     try:
-        return str((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", ""))
+        return str(
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "")
+        )
     except Exception:
         return ""
 
+
 def _extract_tags(det: Dict[str, Any]) -> List[str]:
     tags = det.get("tags", []) or []
-    if isinstance(tags, str): tags = [tags]
+    if isinstance(tags, str):
+        tags = [tags]
     return [t.lower() for t in tags]
+
 
 def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     rule = det.get("name") or (det.get("rule", {}) or {}).get("title") or ""
@@ -324,24 +409,30 @@ def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     sev = 1.0
     for t in tags:
         for k, mult in SEVERITY_TAG_BOOSTS.items():
-            if k in t: sev = max(sev, mult)
+            if k in t:
+                sev = max(sev, mult)
 
     eid_w = EVENT_WEIGHTS.get(str(eid), 1.0)
     freq = rule_freq.get(rule, 1)
     rarity = 1.0 + min(0.8, 1.0 / math.sqrt(freq))
 
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get("ScriptBlockText", "")
+    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
+        "ScriptBlockText", ""
+    )
     script_bonus = 1.0 + min(0.5, len(script) / 2000.0)
 
     return mitre_bonus * sev * eid_w * rarity * script_bonus
 
+
 def score_micro_block(block: List[Dict[str, Any]], rule_freq: Dict[str, int]) -> float:
-    if not block: return 0.0
+    if not block:
+        return 0.0
     scores = sorted((score_detection(d, rule_freq) for d in block), reverse=True)
-    base = sum(scores[:min(5, len(scores))])
+    base = sum(scores[: min(5, len(scores))])
     uniq_rules = len({d.get("name") or (d.get("rule", {}) or {}).get("title") for d in block})
     diversity = 1.0 + min(0.5, (uniq_rules / max(1, len(block))) * 0.5)
     return base * diversity
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Prompt builders
@@ -351,11 +442,15 @@ def fmt_micro_line(det: Dict[str, Any], include_snip: bool = True, snip_len: int
     rule = det.get("name", (det.get("rule", {}) or {}).get("title", "N/A"))
     tags = ", ".join(_extract_tags(det)) or "None"
     eid = _extract_event_id(det) or "N/A"
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get("ScriptBlockText", "")
+    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
+        "ScriptBlockText", ""
+    )
     snip = (script[:snip_len] + ("…" if len(script) > snip_len else "")) if (include_snip and script) else ""
     line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
-    if snip: line += f" | snippet: {snip}"
+    if snip:
+        line += f" | snippet: {snip}"
     return line
+
 
 def build_micro_prompt(block: List[Dict[str, Any]]) -> str:
     hdr = (
@@ -367,6 +462,7 @@ def build_micro_prompt(block: List[Dict[str, Any]]) -> str:
     body = "\n".join(fmt_micro_line(d) for d in block)
     return hdr + "\n" + body
 
+
 def build_final_prompt(micros: List[str]) -> str:
     hdr = (
         "Merge the following micro-summaries into one executive DFIR report. "
@@ -375,14 +471,24 @@ def build_final_prompt(micros: List[str]) -> str:
     )
     return hdr + "\n\n" + "\n\n---\n\n".join(micros)
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # LLM call with robust fallback
 # ────────────────────────────────────────────────────────────────────────────
 def backoff_sleep(i: int):
-    time.sleep(min(30.0, (1.6 ** i) + random.uniform(0, 0.25)))
+    time.sleep(min(30.0, (1.6**i) + random.uniform(0, 0.25)))
 
-def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
-             temperature: float, timeout_s: int, retries: int, stream: bool = False) -> str:
+
+def call_llm(
+    client: OpenAI,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    timeout_s: int,
+    retries: int,
+    stream: bool = False,
+) -> str:
     send_temp = None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
     last_err = None
     for i in range(retries):
@@ -402,7 +508,8 @@ def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
                 out: List[str] = []
                 for ev in chunks:
                     delta = getattr(ev.choices[0].delta, "content", None)
-                    if delta: out.append(delta)
+                    if delta:
+                        out.append(delta)
                 return "".join(out)
             else:
                 resp = client.chat.completions.create(**payload, timeout=timeout_s)
@@ -410,13 +517,20 @@ def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
         except BadRequestError as e:
             msg = str(e).lower()
             if "stream" in msg:
-                stream = False; last_err = e; continue
+                stream = False
+                last_err = e
+                continue
             if "temperature" in msg:
-                send_temp = None; last_err = e; continue
+                send_temp = None
+                last_err = e
+                continue
             raise
         except (RateLimitError, APITimeoutError, APIConnectionError, APIError) as e:
-            last_err = e; backoff_sleep(i); continue
+            last_err = e
+            backoff_sleep(i)
+            continue
     raise RuntimeError(f"LLM retries exceeded: {last_err}")
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Chunking / batching under token guard
@@ -424,6 +538,7 @@ def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
 def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
     for i in range(0, len(lst), size):
         yield lst[i : i + size]
+
 
 def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int) -> List[List[Dict[str, Any]]]:
     size = max(1, base_size)
@@ -439,14 +554,18 @@ def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens:
             return blocks
         size = max(1, size - 2)
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Parallel micro + scoring-aware final selection
 # ────────────────────────────────────────────────────────────────────────────
-def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppConfig) -> Tuple[List[str], Tuple[int,int]]:
+def micro_parallel(
+    client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppConfig
+) -> Tuple[List[str], Tuple[int, int]]:
     usage_in = usage_out = 0
     micros: List[str] = [""] * len(blocks)
 
     import threading
+
     last_call = [0.0]
     lock = threading.Lock()
 
@@ -455,27 +574,38 @@ def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppC
             min_gap = 60.0 / float(cfg.rpm)
             with lock:
                 wait = max(0.0, min_gap - (time.time() - last_call[0]))
-                if wait > 0: time.sleep(wait)
+                if wait > 0:
+                    time.sleep(wait)
                 last_call[0] = time.time()
 
     def work(i: int, b: List[Dict[str, Any]]) -> Tuple[int, str, int, int]:
         user = build_micro_prompt(b)
         tin = est_tokens(SYSTEM_MICRO) + est_tokens(user)
         throttle()
-        out = call_llm(client, cfg.chunk_model, SYSTEM_MICRO, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False)
+        out = call_llm(
+            client, cfg.chunk_model, SYSTEM_MICRO, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+        )
         tout = est_tokens(out)
         return i, out, tin, tout
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Micro[/bold]"), BarColumn(), TextColumn("[progress.completed]/[progress.total]"), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Micro[/bold]"),
+        BarColumn(),
+        TextColumn("[progress.completed]/[progress.total]"),
+        TimeElapsedColumn(),
+    ) as prog:
         task = prog.add_task("micro", total=len(blocks))
         with ThreadPoolExecutor(max_workers=cfg.micro_workers) as ex:
             futs = [ex.submit(work, i, b) for i, b in enumerate(blocks)]
             for f in as_completed(futs):
                 i, out, tin, tout = f.result()
-                micros[i] = f"## Micro {i+1}: Cluster Summary\n\n" + out
-                usage_in += tin; usage_out += tout
+                micros[i] = f"## Micro {i + 1}: Cluster Summary\n\n" + out
+                usage_in += tin
+                usage_out += tout
                 prog.update(task, advance=1)
     return micros, (usage_in, usage_out)
+
 
 def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int) -> List[str]:
     rule_freq: Dict[str, int] = {}
@@ -494,38 +624,59 @@ def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], ma
     for s, m in scored:
         cost = est_tokens(m)
         if budget + cost <= max_tokens:
-            selected.append(m); budget += cost
+            selected.append(m)
+            budget += cost
     if not selected and micros:
         m0 = micros[0]
         allowed = max(1000, max_tokens - est_tokens(SYSTEM_FINAL))
         selected = [m0[: allowed * 4]]
     return selected
 
-def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int,int]]]:
+
+def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     blocks = dynamic_chunks(dets, cfg.chunk_size, cfg.max_input_tokens)
     if not blocks:
         return "# No detections — nothing to summarize.", {}
 
-    console.print(Panel.fit(f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED))
+    console.print(
+        Panel.fit(f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED)
+    )
     micros, (mi_in, mi_out) = micro_parallel(client, blocks, cfg)
 
-    console.print(Panel.fit(f"[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
+    console.print(Panel.fit("[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
     selected = select_best_micros(blocks, micros, cfg.max_input_tokens)
     final_user = build_final_prompt(selected)
 
     final_text = ""
-    with Progress(SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()
+    ) as prog:
         task = prog.add_task("final", total=None)
         if cfg.rpm > 0:
-            time.sleep(max(0.0, 60.0/float(cfg.rpm)))
+            time.sleep(max(0.0, 60.0 / float(cfg.rpm)))
         try:
-            final_text = call_llm(client, cfg.final_model, SYSTEM_FINAL, final_user,
-                                  cfg.temperature, cfg.llm_timeout, cfg.llm_retries,
-                                  stream=False if cfg.max_fidelity else cfg.stream)
+            final_text = call_llm(
+                client,
+                cfg.final_model,
+                SYSTEM_FINAL,
+                final_user,
+                cfg.temperature,
+                cfg.llm_timeout,
+                cfg.llm_retries,
+                stream=False if cfg.max_fidelity else cfg.stream,
+            )
         except RuntimeError as e:
             if "stream" in str(e).lower():
-                final_text = call_llm(client, cfg.final_model, SYSTEM_FINAL, final_user,
-                                      cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False)
+                final_text = call_llm(
+                    client,
+                    cfg.final_model,
+                    SYSTEM_FINAL,
+                    final_user,
+                    cfg.temperature,
+                    cfg.llm_timeout,
+                    cfg.llm_retries,
+                    stream=False,
+                )
             else:
                 raise
         prog.update(task, completed=True)
@@ -547,6 +698,7 @@ def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tupl
     appendix = "\n\n---\n\n## Micro Cluster Summaries\n\n" + "\n\n".join(micros)
     return header + final_text + appendix, usage
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Evidence CSV export (optional)
 # ────────────────────────────────────────────────────────────────────────────
@@ -558,6 +710,7 @@ def _write_csv(path: Path, headers: List[str], rows: List[Tuple[Any, ...]]):
         for r in rows:
             writer.writerow([x if not isinstance(x, (list, dict)) else json.dumps(x, ensure_ascii=False) for x in r])
 
+
 def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     base = outdir / "evidence_csv"
     top = evd.get("top", {}) if isinstance(evd, dict) else {}
@@ -565,22 +718,34 @@ def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     timeframe = evd.get("timeframe", {}) if isinstance(evd, dict) else {}
     iocs = evd.get("iocs", {}) if isinstance(evd, dict) else {}
 
-    _write_csv(base / "summary.csv",
-               ["detections", "first_ts", "last_ts",
-                "unique_rules", "unique_event_ids", "unique_hosts", "unique_users", "unique_tags"],
-               [(
-                   evd.get("detections"),
-                   timeframe.get("first"),
-                   timeframe.get("last"),
-                   counts.get("unique_rules"),
-                   counts.get("unique_event_ids"),
-                   counts.get("unique_hosts"),
-                   counts.get("unique_users"),
-                   counts.get("unique_tags"),
-               )])
+    _write_csv(
+        base / "summary.csv",
+        [
+            "detections",
+            "first_ts",
+            "last_ts",
+            "unique_rules",
+            "unique_event_ids",
+            "unique_hosts",
+            "unique_users",
+            "unique_tags",
+        ],
+        [
+            (
+                evd.get("detections"),
+                timeframe.get("first"),
+                timeframe.get("last"),
+                counts.get("unique_rules"),
+                counts.get("unique_event_ids"),
+                counts.get("unique_hosts"),
+                counts.get("unique_users"),
+                counts.get("unique_tags"),
+            )
+        ],
+    )
 
     def write_top(name: str, pairs: List[List[Any]]):
-        _write_csv(base / f"top_{name}.csv", [name[:-1] if name.endswith('s') else name, "count"], pairs or [])
+        _write_csv(base / f"top_{name}.csv", [name[:-1] if name.endswith("s") else name, "count"], pairs or [])
 
     write_top("rules", top.get("rules", []))
     write_top("event_ids", top.get("event_ids", []))
@@ -590,14 +755,15 @@ def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     def write_ioc(name: str, items: List[str]):
         _write_csv(base / f"iocs_{name}.csv", [name], [(x,) for x in (items or [])])
 
-    write_ioc("ipv4",    iocs.get("ipv4", []))
+    write_ioc("ipv4", iocs.get("ipv4", []))
     write_ioc("domains", iocs.get("domains", []))
-    write_ioc("urls",    iocs.get("urls", []))
-    write_ioc("emails",  iocs.get("emails", []))
-    write_ioc("sha256",  iocs.get("sha256", []))
-    write_ioc("sha1",    iocs.get("sha1", []))
-    write_ioc("md5",     iocs.get("md5", []))
-    write_ioc("paths",   iocs.get("paths", []))
+    write_ioc("urls", iocs.get("urls", []))
+    write_ioc("emails", iocs.get("emails", []))
+    write_ioc("sha256", iocs.get("sha256", []))
+    write_ioc("sha1", iocs.get("sha1", []))
+    write_ioc("md5", iocs.get("md5", []))
+    write_ioc("paths", iocs.get("paths", []))
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Heatmap & Donut helpers + HTML
@@ -606,47 +772,71 @@ def build_heatmap_counts(dets: List[Dict[str, Any]]) -> List[int]:
     buckets = [0] * 24
     for d in dets:
         ts = d.get("timestamp")
-        if not ts: continue
+        if not ts:
+            continue
         try:
-            dt = datetime.fromisoformat(ts.replace("Z","+00:00") if ts.endswith("Z") else ts)
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00") if ts.endswith("Z") else ts)
             hr = dt.astimezone(timezone.utc).hour
             buckets[hr] += 1
         except Exception:
             continue
     return buckets
 
-def counts_by_day(dets: List[Dict[str,Any]]) -> List[Tuple[str,int]]:
+
+def counts_by_day(dets: List[Dict[str, Any]]) -> List[Tuple[str, int]]:
     c = Counter()
     for d in dets:
         ts = d.get("timestamp")
-        if not ts: continue
+        if not ts:
+            continue
         try:
-            dt = datetime.fromisoformat(ts.replace("Z","+00:00") if ts.endswith("Z") else ts)
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00") if ts.endswith("Z") else ts)
             day = dt.date().isoformat()
             c[day] += 1
         except Exception:
             continue
     return sorted(c.items())
 
-def phase_buckets_from_evidence(evd: Dict[str,Any]) -> Dict[str,int]:
-    tag_counts = dict(evd.get("top",{}).get("tags", [])) if isinstance(evd, dict) else {}
+
+def phase_buckets_from_evidence(evd: Dict[str, Any]) -> Dict[str, int]:
+    tag_counts = dict(evd.get("top", {}).get("tags", [])) if isinstance(evd, dict) else {}
     buckets = defaultdict(int)
     phase_map = {
-        "execution":"Execution","powershell":"Execution","wmic":"Execution","encoded":"Execution",
-        "persistence":"Persistence","schtask":"Persistence","registry":"Persistence","runkey":"Persistence",
-        "service":"Persistence","com":"Persistence",
-        "credential":"Accounts/Creds","account":"Accounts/Creds","user":"Accounts/Creds","group":"Accounts/Creds",
-        "discovery":"Discovery/Lateral","lateral":"Discovery/Lateral","smb":"Discovery/Lateral","wmi":"Discovery/Lateral",
-        "exfil":"Impact/Exfil","ransom":"Impact/Exfil",
-        "evasion":"Evasion","obfuscation":"Evasion","log":"Evasion","sysmon":"Evasion",
+        "execution": "Execution",
+        "powershell": "Execution",
+        "wmic": "Execution",
+        "encoded": "Execution",
+        "persistence": "Persistence",
+        "schtask": "Persistence",
+        "registry": "Persistence",
+        "runkey": "Persistence",
+        "service": "Persistence",
+        "com": "Persistence",
+        "credential": "Accounts/Creds",
+        "account": "Accounts/Creds",
+        "user": "Accounts/Creds",
+        "group": "Accounts/Creds",
+        "discovery": "Discovery/Lateral",
+        "lateral": "Discovery/Lateral",
+        "smb": "Discovery/Lateral",
+        "wmi": "Discovery/Lateral",
+        "exfil": "Impact/Exfil",
+        "ransom": "Impact/Exfil",
+        "evasion": "Evasion",
+        "obfuscation": "Evasion",
+        "log": "Evasion",
+        "sysmon": "Evasion",
     }
     for tag, ct in tag_counts.items():
         tag_l = str(tag).lower()
         bucket = "Other"
         for k, name in phase_map.items():
-            if k in tag_l: bucket = name; break
+            if k in tag_l:
+                bucket = name
+                break
         buckets[bucket] += int(ct)
     return dict(buckets)
+
 
 INLINE_CSS = f"""
 :root {{ --fg:#0e1628; --muted:#66728a; --bg:#ffffff; --edge:#eef2f8; --accent:{DFIR_BLUE}; }}
@@ -791,13 +981,17 @@ window.addEventListener('resize', ()=>{
 });
 """
 
-def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outname: str, evd: Dict[str,Any]=None) -> str:
+
+def build_html(
+    md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outname: str, evd: Dict[str, Any] = None
+) -> str:
     counts = build_heatmap_counts(dets)
     by_day = counts_by_day(dets)
-    phase_buckets = phase_buckets_from_evidence(evd or {"top":{"tags":[]}})
-    top_eids = (evd or {}).get("top",{}).get("event_ids", [])[:6]
+    phase_buckets = phase_buckets_from_evidence(evd or {"top": {"tags": []}})
+    top_eids = (evd or {}).get("top", {}).get("event_ids", [])[:6]
 
-    toc_html = """
+    toc_html = (
+        """
     <div class="toc">
       <strong>Contents</strong>
       <ul>
@@ -807,12 +1001,18 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
         <li><a href="#exec">Executive Report</a></li>
       </ul>
     </div>
-    """ if cfg.toc else ""
+    """
+        if cfg.toc
+        else ""
+    )
 
-    branding = "<div class=\"brand\">Powered by <strong>ForenSynth AI\u2122</strong></div>" if cfg.branding else "<div></div>"
+    branding = (
+        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>' if cfg.branding else "<div></div>"
+    )
     body_html = _html.escape(md_final)
 
-    heat_html = f"""
+    heat_html = (
+        """
     <div id="heat" class="section">
       <h2>Detection Heatmap (UTC, per hour)</h2>
       <div class="canvas-wrap">
@@ -820,9 +1020,13 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
       </div>
       <div class="note">Hover cells to see exact hour & count</div>
     </div>
-    """ if cfg.chart_style in ("heatmap","both") else ""
+    """
+        if cfg.chart_style in ("heatmap", "both")
+        else ""
+    )
 
-    charts_html = f"""
+    charts_html = (
+        """
     <div id="charts" class="section">
       <h2>At-a-Glance</h2>
       <div class="charts">
@@ -844,7 +1048,10 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
       </div>
       <div class="note">Percentages shown for larger slices; legend capped to top 8 per chart.</div>
     </div>
-    """ if cfg.chart_style in ("pies","both") else ""
+    """
+        if cfg.chart_style in ("pies", "both")
+        else ""
+    )
 
     # Build the main HTML (no inline f-string JS to avoid brace parsing)
     html = f"""
@@ -858,7 +1065,7 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
 <body>
   <div class="header">
     <div class="h1">ForenSynth AI — DFIR Report</div>
-    <div class="sub">Generated {datetime.now(timezone.utc).isoformat()} | Integrity Mode: {'ON' if cfg.integrity else 'OFF'}</div>
+    <div class="sub">Generated {datetime.now(timezone.utc).isoformat()} | Integrity Mode: {"ON" if cfg.integrity else "OFF"}</div>
     <div class="strip"></div>
   </div>
   <div class="container">
@@ -867,9 +1074,9 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
       <div class="kpi"><div class="label">Detections</div><div class="value">{len(dets)}</div></div>
       <div class="kpi"><div class="label">Chunk Model</div><div class="value">{_html.escape(cfg.chunk_model)}</div></div>
       <div class="kpi"><div class="label">Final Model</div><div class="value">{_html.escape(cfg.final_model)}</div></div>
-      <div class="kpi"><div class="label">Two-Pass</div><div class="value">{'Yes' if cfg.two_pass else 'No'}</div></div>
-      <div class="kpi"><div class="label">Integrity</div><div class="value">{'ON' if cfg.integrity else 'OFF'}</div></div>
-      <div class="kpi"><div class="label">Max Fidelity</div><div class="value">{'ON' if cfg.max_fidelity else 'OFF'}</div></div>
+      <div class="kpi"><div class="label">Two-Pass</div><div class="value">{"Yes" if cfg.two_pass else "No"}</div></div>
+      <div class="kpi"><div class="label">Integrity</div><div class="value">{"ON" if cfg.integrity else "OFF"}</div></div>
+      <div class="kpi"><div class="label">Max Fidelity</div><div class="value">{"ON" if cfg.max_fidelity else "OFF"}</div></div>
     </div>
 
     {heat_html}
@@ -928,17 +1135,20 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
     html += script_block + "</body>\n</html>\n"
     return html
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Cost & Logging & Archiving
 # ────────────────────────────────────────────────────────────────────────────
-def cost_breakdown(usage: Dict[str, Tuple[int,int]]) -> Tuple[float, List[str]]:
-    total = 0.0; lines: List[str] = []
+def cost_breakdown(usage: Dict[str, Tuple[int, int]]) -> Tuple[float, List[str]]:
+    total = 0.0
+    lines: List[str] = []
     for m, (ti, to) in usage.items():
-        p = PRICING.get(m, {"in":0.0, "out":0.0})
-        c = (ti/1000.0)*p["in"] + (to/1000.0)*p["out"]
+        p = PRICING.get(m, {"in": 0.0, "out": 0.0})
+        c = (ti / 1000.0) * p["in"] + (to / 1000.0) * p["out"]
         total += c
         lines.append(f"- {m}: in={ti}, out={to} → ${c:.6f} (in {p['in']}/k, out {p['out']}/k)")
-    return round(total,6), lines
+    return round(total, 6), lines
+
 
 def write_run_log(csv_path: Path, row: Dict[str, Any]):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -947,32 +1157,53 @@ def write_run_log(csv_path: Path, row: Dict[str, Any]):
         with csv_path.open("r", newline="", encoding="utf-8") as f:
             rows.extend(csv.DictReader(f))
     rows.append(row)
-    rows.sort(key=lambda r: r.get("timestamp",""), reverse=True)
+    rows.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["timestamp","detections","runtime_sec","cost_usd","integrity","chunk_model","final_model"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "timestamp",
+                "detections",
+                "runtime_sec",
+                "cost_usd",
+                "integrity",
+                "chunk_model",
+                "final_model",
+            ],
+        )
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
 
     tbl = Table(title="Recent ForenSynth Runs (latest 5)", box=box.SIMPLE_HEAVY)
-    for h in ["timestamp","detections","runtime_sec","cost_usd","integrity","chunk_model","final_model"]:
+    for h in ["timestamp", "detections", "runtime_sec", "cost_usd", "integrity", "chunk_model", "final_model"]:
         tbl.add_column(h)
     for r in rows[:5]:
-        tbl.add_row(r.get("timestamp",""), str(r.get("detections","")), str(r.get("runtime_sec","")),
-                    str(r.get("cost_usd","")), r.get("integrity",""), r.get("chunk_model",""), r.get("final_model",""))
+        tbl.add_row(
+            r.get("timestamp", ""),
+            str(r.get("detections", "")),
+            str(r.get("runtime_sec", "")),
+            str(r.get("cost_usd", "")),
+            r.get("integrity", ""),
+            r.get("chunk_model", ""),
+            r.get("final_model", ""),
+        )
     console.print(tbl)
 
+
 def archive_old_reports(base_dir: Path, keep_day: str):
-    archive_dir = base_dir/"archive"/keep_day
+    archive_dir = base_dir / "archive" / keep_day
     archive_dir.mkdir(parents=True, exist_ok=True)
     for p in list(base_dir.iterdir()):
-        if p.name == "archive": continue
+        if p.name == "archive":
+            continue
         if p.is_dir() and p.name.startswith(keep_day):
             continue
         if p.is_dir():
-            shutil.move(str(p), archive_dir/p.name)
-        elif p.is_file() and (p.suffix in {".html",".md",".pdf"}):
-            shutil.move(str(p), archive_dir/p.name)
+            shutil.move(str(p), archive_dir / p.name)
+        elif p.is_file() and (p.suffix in {".html", ".md", ".pdf"}):
+            shutil.move(str(p), archive_dir / p.name)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Main
@@ -983,11 +1214,14 @@ def main():
         return _run_tests()
 
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: die("OPENAI_API_KEY not set")
+    if not api_key:
+        die("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
 
     if cfg.integrity:
-        console.print(Panel.fit("🧠 Integrity Mode Active — prioritizing detection accuracy over cost.", box=box.ROUNDED))
+        console.print(
+            Panel.fit("🧠 Integrity Mode Active — prioritizing detection accuracy over cost.", box=box.ROUNDED)
+        )
 
     console.rule("[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.3 (Visual Refresh)[/bold cyan]")
     if not cfg.branding:
@@ -1029,8 +1263,10 @@ def main():
     tag_ctr = Counter()
     for d in dets:
         eid = _extract_event_id(d)
-        if eid: eid_ctr[eid] += 1
-        for t in _extract_tags(d): tag_ctr[t] += 1
+        if eid:
+            eid_ctr[eid] += 1
+        for t in _extract_tags(d):
+            tag_ctr[t] += 1
     evd["top"]["event_ids"] = [[k, v] for k, v in eid_ctr.most_common(10)]
     evd["top"]["tags"] = [[k, v] for k, v in tag_ctr.most_common(20)]
 
@@ -1049,16 +1285,19 @@ def main():
             html_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.html"
             html_path.write_text(html, encoding="utf-8")
             ok(f"Report written: {html_path}")
-        write_run_log(cfg.outdir/"run_log.csv", {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "detections": 0,
-            "runtime_sec": int(time.time()-start),
-            "cost_usd": f"{0.0:.6f}",
-            "integrity": "on" if cfg.integrity else "off",
-            "chunk_model": cfg.chunk_model,
-            "final_model": cfg.final_model,
-        })
-        archive_old_reports(cfg.outdir, keep_day=stamp.split('_')[0])
+        write_run_log(
+            cfg.outdir / "run_log.csv",
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "detections": 0,
+                "runtime_sec": int(time.time() - start),
+                "cost_usd": f"{0.0:.6f}",
+                "integrity": "on" if cfg.integrity else "off",
+                "chunk_model": cfg.chunk_model,
+                "final_model": cfg.final_model,
+            },
+        )
+        archive_old_reports(cfg.outdir, keep_day=stamp.split("_")[0])
         return
 
     # Summarize
@@ -1071,14 +1310,24 @@ def main():
         base_in = est_tokens(SYSTEM_FINAL)
         while base_in + est_tokens(user) > cfg.max_input_tokens:
             parts = user.splitlines()
-            if len(parts) <= 10: break
+            if len(parts) <= 10:
+                break
             user = "\n".join(parts[:-10])
         final_text = ""
-        with Progress(SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()) as prog:
+        with Progress(
+            SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()
+        ) as prog:
             task = prog.add_task("final", total=None)
-            final_text = call_llm(client, cfg.final_model, SYSTEM_FINAL, user,
-                                  cfg.temperature, cfg.llm_timeout, cfg.llm_retries,
-                                  stream=cfg.stream)
+            final_text = call_llm(
+                client,
+                cfg.final_model,
+                SYSTEM_FINAL,
+                user,
+                cfg.temperature,
+                cfg.llm_timeout,
+                cfg.llm_retries,
+                stream=cfg.stream,
+            )
             prog.update(task, completed=True)
 
         usage = {cfg.final_model: (base_in + est_tokens(user), est_tokens(final_text))}
@@ -1107,31 +1356,38 @@ def main():
         except Exception as e:
             info(f"PDF generation failed/skipped: {e}")
 
-    archive_old_reports(cfg.outdir, keep_day=stamp.split('_')[0])
+    archive_old_reports(cfg.outdir, keep_day=stamp.split("_")[0])
 
     runtime = int(time.time() - start)
     total_cost, lines = cost_breakdown(usage)
 
-    write_run_log(cfg.outdir/"run_log.csv", {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "detections": count,
-        "runtime_sec": runtime,
-        "cost_usd": f"{total_cost:.6f}",
-        "integrity": "on" if cfg.integrity else "off",
-        "chunk_model": cfg.chunk_model,
-        "final_model": cfg.final_model,
-    })
+    write_run_log(
+        cfg.outdir / "run_log.csv",
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "detections": count,
+            "runtime_sec": runtime,
+            "cost_usd": f"{total_cost:.6f}",
+            "integrity": "on" if cfg.integrity else "off",
+            "chunk_model": cfg.chunk_model,
+            "final_model": cfg.final_model,
+        },
+    )
 
     console.rule("[bold]Cost Breakdown[/bold]")
-    for ln in lines: console.print(ln)
+    for ln in lines:
+        console.print(ln)
     console.print(f"Total cost: ${total_cost:.6f}")
 
-    console.print(Panel.fit(
-        f"[white on dodger_blue2]  Runtime Summary  [/white on dodger_blue2]\n"
-        f"Processed {count} detections in {runtime}s | Output: {md_path.name}"
-        + (f" | HTML: {html_path.name}" if html_path else ""),
-        box=box.ROUNDED
-    ))
+    console.print(
+        Panel.fit(
+            f"[white on dodger_blue2]  Runtime Summary  [/white on dodger_blue2]\n"
+            f"Processed {count} detections in {runtime}s | Output: {md_path.name}"
+            + (f" | HTML: {html_path.name}" if html_path else ""),
+            box=box.ROUNDED,
+        )
+    )
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Basic Tests (unit-style)
@@ -1141,22 +1397,19 @@ def _fake_det(ts: str, name: str, eid: str, tags: List[str], script: str = "") -
         "timestamp": ts,
         "name": name,
         "tags": tags,
-        "document": {
-            "data": {
-                "Event": {
-                    "System": {"EventID": eid},
-                    "EventData": {"ScriptBlockText": script}
-                }
-            }
-        }
+        "document": {"data": {"Event": {"System": {"EventID": eid}, "EventData": {"ScriptBlockText": script}}}},
     }
+
 
 def _run_tests():
     import unittest
 
     class TokenGuardTests(unittest.TestCase):
         def test_dynamic_chunks_guard(self):
-            dets = [_fake_det("2024-01-01T00:00:00Z", f"Rule T1059.{i%3}", "4688", ["high","execution"], "A"*400) for i in range(200)]
+            dets = [
+                _fake_det("2024-01-01T00:00:00Z", f"Rule T1059.{i % 3}", "4688", ["high", "execution"], "A" * 400)
+                for i in range(200)
+            ]
             blocks = dynamic_chunks(dets, base_size=50, max_input_tokens=6000)
             total = 0
             for b in blocks:
@@ -1167,14 +1420,42 @@ def _run_tests():
     class HtmlEscapeTests(unittest.TestCase):
         def test_html_escape(self):
             malicious = "# Title\n<script>alert('x')</script>"
-            html = build_html(malicious, [], AppConfig(
-                evtx_root=Path("."), scope="dir", prefer=[], rules=Path("."), mapping=Path("."), sigma_root=None,
-                outdir=Path("."), two_pass=True, make_html=True, make_pdf=False, toc=False, branding=False, fast=False, stream=False,
-                integrity=False, run_tests=False, max_fidelity=True,
-                chunk_model="gpt-5-mini", final_model="gpt-5", llm_timeout=30, llm_retries=3,
-                temperature=1.0, max_input_tokens=8000, chunk_size=25, max_chunks=20, micro_workers=1, rpm=0,
-                export_evidence_csv=False, chart_style="both"
-            ), "out.md")
+            html = build_html(
+                malicious,
+                [],
+                AppConfig(
+                    evtx_root=Path("."),
+                    scope="dir",
+                    prefer=[],
+                    rules=Path("."),
+                    mapping=Path("."),
+                    sigma_root=None,
+                    outdir=Path("."),
+                    two_pass=True,
+                    make_html=True,
+                    make_pdf=False,
+                    toc=False,
+                    branding=False,
+                    fast=False,
+                    stream=False,
+                    integrity=False,
+                    run_tests=False,
+                    max_fidelity=True,
+                    chunk_model="gpt-5-mini",
+                    final_model="gpt-5",
+                    llm_timeout=30,
+                    llm_retries=3,
+                    temperature=1.0,
+                    max_input_tokens=8000,
+                    chunk_size=25,
+                    max_chunks=20,
+                    micro_workers=1,
+                    rpm=0,
+                    export_evidence_csv=False,
+                    chart_style="both",
+                ),
+                "out.md",
+            )
             self.assertNotIn("<script>", html)
             self.assertIn("&lt;script&gt;", html)
 
@@ -1185,6 +1466,7 @@ def _run_tests():
     if not res.wasSuccessful():
         sys.exit(1)
     ok("All tests passed.")
+
 
 # ────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

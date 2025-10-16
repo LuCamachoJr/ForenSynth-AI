@@ -4,29 +4,50 @@
 # Requires: chainsaw, Python 3.9+, openai, tiktoken, python-dotenv, rich
 from __future__ import annotations
 
-import argparse, json, math, os, re, shutil, subprocess, sys, time, random, csv
-from dataclasses import dataclass
-from datetime import datetime, UTC
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+import argparse
+import csv
+import json
+import math
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from dotenv import load_dotenv
-from openai import OpenAI
-from openai import APIError, APIConnectionError, BadRequestError, RateLimitError, APITimeoutError
 import tiktoken
+from dotenv import load_dotenv
+from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich import box
-from rich.markdown import Markdown
 
 # ───────────────────────────────────────── UI Helpers ─────────────────────────────────────────
 console = Console()
 
-def ok(msg: str): console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
-def info(msg: str): console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
-def warn(msg: str): console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
-def die(msg: str, code: int = 1): console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED)); sys.exit(code)
+
+def ok(msg: str):
+    console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
+
+
+def info(msg: str):
+    console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
+
+
+def warn(msg: str):
+    console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
+
+
+def die(msg: str, code: int = 1):
+    console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED))
+    sys.exit(code)
+
 
 # ───────────────────────────────────────── Defaults ───────────────────────────────────────────
 BRAND_NAME = "ForenSynth AI"
@@ -36,9 +57,9 @@ DEFAULT_CHUNK_MODEL = os.getenv("CHUNK_MODEL", "gpt-5-mini")
 DEFAULT_FINAL_MODEL = os.getenv("FINAL_MODEL", "gpt-5")
 
 PRICING = {  # per 1K tokens
-    "gpt-5-nano": {"in": 0.0001,  "out": 0.0008},   # example defaults; override with --pricing-json if needed
+    "gpt-5-nano": {"in": 0.0001, "out": 0.0008},  # example defaults; override with --pricing-json if needed
     "gpt-5-mini": {"in": 0.00025, "out": 0.0020},
-    "gpt-5":      {"in": 0.00125, "out": 0.0100},
+    "gpt-5": {"in": 0.00125, "out": 0.0100},
     "gpt-3.5-turbo": {"in": 0.0005, "out": 0.0015},
 }
 
@@ -133,6 +154,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </html>
 """
 
+
 # ───────────────────────────────────────── Config ─────────────────────────────────────────────
 @dataclass
 class AppConfig:
@@ -157,11 +179,12 @@ class AppConfig:
     rpm: int
     micro_workers: int
     # Behavior
-    branding: str            # "on" | "off"
-    integrity: str           # "on" | "off"
+    branding: str  # "on" | "off"
+    integrity: str  # "on" | "off"
     fast: bool
     # Cost override
     pricing_json: Optional[str]
+
 
 # ───────────────────────────────────────── CLI ───────────────────────────────────────────────
 def parse_args() -> AppConfig:
@@ -186,11 +209,13 @@ def parse_args() -> AppConfig:
     p.add_argument("--llm-temperature", type=float, default=1.0)
     p.add_argument("--rpm", type=int, default=0, help="Requests per minute limit (0 = unlimited)")
     p.add_argument("--micro-workers", type=str, default="1", help="'auto' or integer >=1")
-    p.add_argument("--branding", choices=["on","off"], default="off", help="Add 'Powered by ForenSynth AI' footer")
-    p.add_argument("--integrity", choices=["on","off"], default="off", help="Force models to gpt-5-mini/gpt-5")
+    p.add_argument("--branding", choices=["on", "off"], default="off", help="Add 'Powered by ForenSynth AI' footer")
+    p.add_argument("--integrity", choices=["on", "off"], default="off", help="Force models to gpt-5-mini/gpt-5")
     p.add_argument("--fast", action="store_true", help="Shortcut: auto micro-workers and conservative chunk sizes")
 
-    p.add_argument("--pricing-json", type=str, default=None, help='Inline JSON map {"model":{"in":x,"out":y}} to override pricing')
+    p.add_argument(
+        "--pricing-json", type=str, default=None, help='Inline JSON map {"model":{"in":x,"out":y}} to override pricing'
+    )
 
     a = p.parse_args()
 
@@ -244,27 +269,41 @@ def parse_args() -> AppConfig:
         pricing_json=a.pricing_json,
     )
 
+
 # ───────────────────────────────────────── Chainsaw ──────────────────────────────────────────
 def ensure_chainsaw():
     if shutil.which("chainsaw") is None:
         die("chainsaw not found in PATH")
 
+
 def latest_container(root: Path) -> Path:
-    if not root.exists(): die(f"EVTX root not found: {root}")
+    if not root.exists():
+        die(f"EVTX root not found: {root}")
     dirs = [p for p in root.iterdir() if p.is_dir()]
-    if not dirs: die(f"No subfolders under {root}")
+    if not dirs:
+        die(f"No subfolders under {root}")
     return max(dirs, key=lambda p: p.stat().st_mtime)
 
-def run_chainsaw_hunt(container: Path, rules: Path, mapping: Path, sigma_root: Optional[Path], out_json: Path) -> Tuple[str, List[str]]:
+
+def run_chainsaw_hunt(
+    container: Path, rules: Path, mapping: Path, sigma_root: Optional[Path], out_json: Path
+) -> Tuple[str, List[str]]:
     ensure_chainsaw()
     rules_dir = rules
     sigma = sigma_root or rules_dir.parent
     cmd = [
-        "chainsaw","hunt", str(container),
-        "--mapping", str(mapping),
-        "--rule", str(rules_dir),
-        "-s", str(sigma),
-        "--json","--output", str(out_json)
+        "chainsaw",
+        "hunt",
+        str(container),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules_dir),
+        "-s",
+        str(sigma),
+        "--json",
+        "--output",
+        str(out_json),
     ]
     info("Running Chainsaw hunt…")
     res = subprocess.run(cmd, capture_output=True, text=True)
@@ -280,14 +319,21 @@ def run_chainsaw_hunt(container: Path, rules: Path, mapping: Path, sigma_root: O
     ok(f"Chainsaw hunt completed. Detections: {count}")
     return "json", cmd
 
+
 # ───────────────────────────────────────── Detections IO ─────────────────────────────────────
 class LoaderError(Exception): ...
 
+
 def read_text(path: Path) -> str:
-    if not path.exists(): raise LoaderError(f"file not found: {path}")
-    if path.stat().st_size == 0: raise LoaderError(f"file is empty: {path}")
-    try: return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError: return path.read_text(encoding="utf-8-sig")
+    if not path.exists():
+        raise LoaderError(f"file not found: {path}")
+    if path.stat().st_size == 0:
+        raise LoaderError(f"file is empty: {path}")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8-sig")
+
 
 def parse_detections_auto(text: str) -> List[Dict[str, Any]]:
     # Chainsaw outputs a top-level array of detections (each a dict)
@@ -301,6 +347,7 @@ def parse_detections_auto(text: str) -> List[Dict[str, Any]]:
         return obj["detections"]
     raise LoaderError("Unexpected detections JSON shape (expect list or dict.detections)")
 
+
 def load_detections(path: Path, max_items: int) -> List[Dict[str, Any]]:
     t = read_text(path)
     dets = parse_detections_auto(t)
@@ -308,14 +355,21 @@ def load_detections(path: Path, max_items: int) -> List[Dict[str, Any]]:
         dets = dets[:max_items]
     return dets
 
+
 # ───────────────────────────────────────── Token utils ───────────────────────────────────────
 def encoder() -> tiktoken.Encoding:
-    try: return tiktoken.get_encoding("cl100k_base")
-    except Exception: return tiktoken.get_encoding("cl100k_base")
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return tiktoken.get_encoding("cl100k_base")
+
 
 def est_tokens(text: str) -> int:
-    try: return len(encoder().encode(text))
-    except Exception: return math.ceil(len(text)/4)
+    try:
+        return len(encoder().encode(text))
+    except Exception:
+        return math.ceil(len(text) / 4)
+
 
 # ───────────────────────────────────────── Prompt builders ───────────────────────────────────
 DEFAULT_SYSTEM_PROMPT = (
@@ -329,27 +383,33 @@ FINAL_SYSTEM_PROMPT = (
     "finish with prioritized recommendations (High/Med/Low)."
 )
 
+
 def fmt_micro_input(block: List[Dict[str, Any]], include_script_chars: int = 160) -> str:
     lines = ["Summarize these events into <= 12 bullets total (executive tone):"]
     for d in block:
-        ts = d.get("timestamp","N/A")
-        name = d.get("name","(untitled)")
-        tags = ", ".join(d.get("tags",[]) or [])
-        doc = (((d.get("document") or {}).get("data") or {}).get("Event") or {})
-        eid = ((doc.get("System") or {}).get("EventID") or "N/A")
-        script = ((doc.get("EventData") or {}).get("ScriptBlockText") or "")
-        if isinstance(script, str) and include_script_chars>0 and script:
-            script = script[:include_script_chars] + ("… [truncated]" if len(script)>include_script_chars else "")
+        ts = d.get("timestamp", "N/A")
+        name = d.get("name", "(untitled)")
+        tags = ", ".join(d.get("tags", []) or [])
+        doc = ((d.get("document") or {}).get("data") or {}).get("Event") or {}
+        eid = (doc.get("System") or {}).get("EventID") or "N/A"
+        script = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
+        if isinstance(script, str) and include_script_chars > 0 and script:
+            script = script[:include_script_chars] + ("… [truncated]" if len(script) > include_script_chars else "")
             # guard backticks in case model tries to format
-            script = script.replace("`","'")
+            script = script.replace("`", "'")
         ln = f"- [{ts}] {name} (EventID {eid}; Tags: {tags})"
-        if script: ln += f" | snippet: {script}"
+        if script:
+            ln += f" | snippet: {script}"
         lines.append(ln)
     return "\n".join(lines)
 
+
 def build_final_prompt(micros: List[str]) -> str:
-    return "=== MICRO REPORTS START ===\n\n" + "\n\n---\n\n".join(micros) + "\n\n=== MICRO REPORTS END ===\n\n" \
-           "Produce the final executive report now."
+    return (
+        "=== MICRO REPORTS START ===\n\n" + "\n\n---\n\n".join(micros) + "\n\n=== MICRO REPORTS END ===\n\n"
+        "Produce the final executive report now."
+    )
+
 
 # ───────────────────────────────────────── OpenAI calls ──────────────────────────────────────
 def safe_temperature(model: str, t: float) -> Optional[float]:
@@ -358,15 +418,18 @@ def safe_temperature(model: str, t: float) -> Optional[float]:
         return None if abs(t - 1.0) < 1e-6 else None  # force default
     return t
 
-def call_llm(client: OpenAI, model: str, system: str, user: str, timeout_s: int, retries: int, temperature: float) -> str:
+
+def call_llm(
+    client: OpenAI, model: str, system: str, user: str, timeout_s: int, retries: int, temperature: float
+) -> str:
     st = time.time()
     last_err: Optional[Exception] = None
     for i in range(retries):
         try:
             payload: Dict[str, Any] = {
                 "model": model,
-                "messages": [{"role":"system","content":system},{"role":"user","content":user}],
-                "timeout": timeout_s
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "timeout": timeout_s,
             }
             tval = safe_temperature(model, temperature)
             if tval is not None:
@@ -375,19 +438,25 @@ def call_llm(client: OpenAI, model: str, system: str, user: str, timeout_s: int,
             return resp.choices[0].message.content or ""
         except (RateLimitError, APITimeoutError, APIConnectionError, APIError, BadRequestError) as e:
             last_err = e
-            time.sleep(min(30, 1.5**i + random.uniform(0,0.3)))
+            time.sleep(min(30, 1.5**i + random.uniform(0, 0.3)))
     raise RuntimeError(f"LLM retries exceeded after {retries} attempts: {last_err}")
+
 
 # ───────────────────────────────────────── Chunking / Overflow ───────────────────────────────
 def chunk_list(lst: List[Any], n: int) -> List[List[Any]]:
-    return [lst[i:i+n] for i in range(0, len(lst), n)]
+    return [lst[i : i + n] for i in range(0, len(lst), n)]
 
-def ensure_token_budget_or_split(blocks: List[List[Dict[str,Any]]], cfg: AppConfig, system_prompt: str) -> List[List[Dict[str,Any]]]:
+
+def ensure_token_budget_or_split(
+    blocks: List[List[Dict[str, Any]]], cfg: AppConfig, system_prompt: str
+) -> List[List[Dict[str, Any]]]:
     # Estimate total prompt tokens; split further if overflow
     enc = encoder()
-    def est_block_tokens(b: List[Dict[str,Any]]) -> int:
+
+    def est_block_tokens(b: List[Dict[str, Any]]) -> int:
         up = fmt_micro_input(b)
         return len(enc.encode(system_prompt)) + len(enc.encode(up))
+
     total = sum(est_block_tokens(b) for b in blocks)
     if total <= cfg.max_input_tokens:
         return blocks
@@ -403,22 +472,26 @@ def ensure_token_budget_or_split(blocks: List[List[Dict[str,Any]]], cfg: AppConf
         warn(f"Token budget still high ({total} > {cfg.max_input_tokens}). Proceeding with best-effort smaller blocks.")
     return current
 
+
 # ───────────────────────────────────────── IOC Extraction ────────────────────────────────────
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,})\b", re.I)
 SHA256_RE = re.compile(r"\b[a-f0-9]{64}\b", re.I)
 MD5_RE = re.compile(r"\b[a-f0-9]{32}\b", re.I)
 
-def extract_iocs(detections: List[Dict[str,Any]]) -> Dict[str, List[str]]:
+
+def extract_iocs(detections: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     text_bucket = []
     for d in detections:
-        text_bucket.append(d.get("name",""))
+        text_bucket.append(d.get("name", ""))
         # flatten likely strings
-        doc = d.get("document",{}); data = (doc.get("data") or {})
-        ev = (data.get("Event") or {})
-        evd = (ev.get("EventData") or {})
-        for k,v in evd.items():
-            if isinstance(v, str): text_bucket.append(v)
+        doc = d.get("document", {})
+        data = doc.get("data") or {}
+        ev = data.get("Event") or {}
+        evd = ev.get("EventData") or {}
+        for k, v in evd.items():
+            if isinstance(v, str):
+                text_bucket.append(v)
     blob = "\n".join(text_bucket)
     ips = sorted(set(IP_RE.findall(blob)))
     doms = sorted(set(DOMAIN_RE.findall(blob)))
@@ -426,20 +499,23 @@ def extract_iocs(detections: List[Dict[str,Any]]) -> Dict[str, List[str]]:
     md5 = sorted(set(MD5_RE.findall(blob)))
     return {"ips": ips, "domains": doms, "sha256": sha256, "md5": md5}
 
+
 def render_ioc_block(iocs: Dict[str, List[str]]) -> str:
     lines = []
-    for k in ("ips","domains","sha256","md5"):
+    for k in ("ips", "domains", "sha256", "md5"):
         vals = iocs.get(k, [])
         lines.append(f"{k}: {', '.join(vals) if vals else '(none)'}")
     return "\n".join(lines)
 
+
 # ───────────────────────────────────────── HTML Helpers ──────────────────────────────────────
 def html_escape(s: str) -> str:
-    return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 
 def md_to_html_safe(md: str) -> str:
     # very simple safe converter for basic paragraphs and bullets
-    md = md.replace("`","'")  # avoid TeX-like interpretation in consumers
+    md = md.replace("`", "'")  # avoid TeX-like interpretation in consumers
     lines = md.splitlines()
     out = []
     for ln in lines:
@@ -467,6 +543,7 @@ def md_to_html_safe(md: str) -> str:
         html.append("</ul>")
     return "\n".join(html)
 
+
 def micro_cards_html(micro_sections: List[str]) -> str:
     cards = []
     for i, sec in enumerate(micro_sections, start=1):
@@ -486,23 +563,41 @@ def micro_cards_html(micro_sections: List[str]) -> str:
         cards.append(card)
     return "\n".join(cards)
 
+
 # ───────────────────────────────────────── Costs / Logs / Archive ────────────────────────────
-def estimate_cost(usages: Dict[str, Tuple[int,int]], pricing_map: Dict[str, Dict[str,float]]) -> Tuple[float, List[str]]:
-    total = 0.0; lines=[]
-    for m,(tin,tout) in usages.items():
-        p = pricing_map.get(m, {"in":0.0,"out":0.0})
-        c = (tin/1000.0)*p["in"] + (tout/1000.0)*p["out"]
+def estimate_cost(
+    usages: Dict[str, Tuple[int, int]], pricing_map: Dict[str, Dict[str, float]]
+) -> Tuple[float, List[str]]:
+    total = 0.0
+    lines = []
+    for m, (tin, tout) in usages.items():
+        p = pricing_map.get(m, {"in": 0.0, "out": 0.0})
+        c = (tin / 1000.0) * p["in"] + (tout / 1000.0) * p["out"]
         total += c
         lines.append(f"- {m}: in={tin}, out={tout} → ${c:.6f} (in {p['in']}/k, out {p['out']}/k)")
-    return round(total,6), lines
+    return round(total, 6), lines
 
-def append_run_log(csv_path: Path, *, ts: str, detections: int, runtime_s: int, cost: float, integrity: str, chunk_model: str, final_model: str):
+
+def append_run_log(
+    csv_path: Path,
+    *,
+    ts: str,
+    detections: int,
+    runtime_s: int,
+    cost: float,
+    integrity: str,
+    chunk_model: str,
+    final_model: str,
+):
     write_header = not csv_path.exists()
     with csv_path.open("a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if write_header:
-            w.writerow(["timestamp","detections","runtime_sec","cost_usd","integrity","chunk_model","final_model"])
+            w.writerow(
+                ["timestamp", "detections", "runtime_sec", "cost_usd", "integrity", "chunk_model", "final_model"]
+            )
         w.writerow([ts, detections, runtime_s, f"{cost:.6f}", integrity, chunk_model, final_model])
+
 
 def archive_old_reports(report_dir: Path):
     # move previous .html/.md to archive/YYYY-MM-DD (keep today’s files)
@@ -515,6 +610,7 @@ def archive_old_reports(report_dir: Path):
     for p in report_dir.glob("*.md"):
         if today not in p.name:
             shutil.move(str(p), arch / p.name)
+
 
 # ───────────────────────────────────────── Pipeline ──────────────────────────────────────────
 def main():
@@ -571,28 +667,36 @@ def main():
         html_path = out_dir_date / f"forensynth_report_{start_ts.strftime('%Y-%m-%d')}.html"
         md_path.write_text(empty_md, encoding="utf-8")
         html = HTML_TEMPLATE.replace("{{REPORT_TITLE}}", f"ForenSynth Report — {start_ts.strftime('%Y-%m-%d')}")
-        html = html.replace("{{SUBTITLE}}","No detections; summarization skipped.")
-        html = html.replace("{{DETECTION_COUNT}}","0")
-        html = html.replace("{{INTEGRITY}}", "ON" if cfg.integrity=="on" else "OFF")
+        html = html.replace("{{SUBTITLE}}", "No detections; summarization skipped.")
+        html = html.replace("{{DETECTION_COUNT}}", "0")
+        html = html.replace("{{INTEGRITY}}", "ON" if cfg.integrity == "on" else "OFF")
         html = html.replace("{{MICRO_MODEL}}", cfg.chunk_model)
         html = html.replace("{{FINAL_MODEL}}", cfg.final_model if cfg.two_pass else cfg.chunk_model)
-        html = html.replace("{{RUNTIME}}","0s")
-        html = html.replace("{{COST}}","0.000000")
-        html = html.replace("{{START_TS}}", start_ts.isoformat(timespec="seconds")+"Z")
-        html = html.replace("{{END_TS}}", datetime.utcnow().isoformat(timespec="seconds")+"Z")
+        html = html.replace("{{RUNTIME}}", "0s")
+        html = html.replace("{{COST}}", "0.000000")
+        html = html.replace("{{START_TS}}", start_ts.isoformat(timespec="seconds") + "Z")
+        html = html.replace("{{END_TS}}", datetime.utcnow().isoformat(timespec="seconds") + "Z")
         html = html.replace("{{EXEC_HTML}}", md_to_html_safe("No activity to summarize."))
         html = html.replace("{{MICRO_CARDS}}", "")
-        html = html.replace("{{IOC_BLOCK}}","(none)")
-        html = html.replace("{{ENV_BLOCK}}", f"Rules={cfg.rules}\nMapping={cfg.mapping}\nSigmaRoot={cfg.sigma_root or cfg.rules.parent}")
+        html = html.replace("{{IOC_BLOCK}}", "(none)")
+        html = html.replace(
+            "{{ENV_BLOCK}}", f"Rules={cfg.rules}\nMapping={cfg.mapping}\nSigmaRoot={cfg.sigma_root or cfg.rules.parent}"
+        )
         html = html.replace("{{REPORT_CSS}}", REPORT_CSS)
-        footer = "<p>Powered by <strong>ForenSynth AI™</strong> — Automated DFIR Intelligence Engine</p>" if cfg.branding=="on" else ""
+        footer = (
+            "<p>Powered by <strong>ForenSynth AI™</strong> — Automated DFIR Intelligence Engine</p>"
+            if cfg.branding == "on"
+            else ""
+        )
         html = html.replace("{{FOOTER}}", footer)
         html_path.write_text(html, encoding="utf-8")
         ok(f"Empty report written: {html_path}")
         return
 
     # Environment blurb
-    env_block = f"Rules={cfg.rules}\nMapping={cfg.mapping}\nSigmaRoot={cfg.sigma_root or cfg.rules.parent}\nEVTX={latest}"
+    env_block = (
+        f"Rules={cfg.rules}\nMapping={cfg.mapping}\nSigmaRoot={cfg.sigma_root or cfg.rules.parent}\nEVTX={latest}"
+    )
 
     # 3) Micro summaries (parallel if configured) with token overflow protection
     info(f"Detections found ({det_count}) — generating micro-summaries…")
@@ -603,12 +707,20 @@ def main():
     micro_texts: List[str] = []
     in_tok = 0
     out_tok = 0
-    usages: Dict[str, Tuple[int,int]] = {}
+    usages: Dict[str, Tuple[int, int]] = {}
 
-    def do_micro(b: List[Dict[str,Any]]) -> Tuple[str,int,int]:
+    def do_micro(b: List[Dict[str, Any]]) -> Tuple[str, int, int]:
         user_prompt = fmt_micro_input(b)
         _in = est_tokens(DEFAULT_SYSTEM_PROMPT) + est_tokens(user_prompt)
-        txt = call_llm(client, cfg.chunk_model, DEFAULT_SYSTEM_PROMPT, user_prompt, cfg.llm_timeout, cfg.llm_retries, cfg.llm_temperature)
+        txt = call_llm(
+            client,
+            cfg.chunk_model,
+            DEFAULT_SYSTEM_PROMPT,
+            user_prompt,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            cfg.llm_temperature,
+        )
         _out = est_tokens(txt)
         return txt, _in, _out
 
@@ -621,11 +733,14 @@ def main():
                 except Exception as e:
                     txt, _in, _out = (f"**[Micro failure]** {e}", 0, 0)
                 micro_texts.append(txt)
-                in_tok += _in; out_tok += _out
+                in_tok += _in
+                out_tok += _out
     else:
         for b in blocks:
             txt, _in, _out = do_micro(b)
-            micro_texts.append(txt); in_tok += _in; out_tok += _out
+            micro_texts.append(txt)
+            in_tok += _in
+            out_tok += _out
 
     usages[cfg.chunk_model] = (in_tok, out_tok)
 
@@ -636,11 +751,21 @@ def main():
         info("Compiling executive summary with final model…")
         final_user = build_final_prompt(micro_texts)
         final_in = est_tokens(FINAL_SYSTEM_PROMPT) + est_tokens(final_user)
-        final_txt = call_llm(client, cfg.final_model, FINAL_SYSTEM_PROMPT, final_user, cfg.llm_timeout, cfg.llm_retries, cfg.llm_temperature)
+        final_txt = call_llm(
+            client,
+            cfg.final_model,
+            FINAL_SYSTEM_PROMPT,
+            final_user,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            cfg.llm_temperature,
+        )
         final_out = est_tokens(final_txt)
         exec_html = md_to_html_safe(final_txt)
-        usages[cfg.final_model] = (usages.get(cfg.final_model,(0,0))[0] + final_in,
-                                   usages.get(cfg.final_model,(0,0))[1] + final_out)
+        usages[cfg.final_model] = (
+            usages.get(cfg.final_model, (0, 0))[0] + final_in,
+            usages.get(cfg.final_model, (0, 0))[1] + final_out,
+        )
     else:
         # If not two-pass, use first micro as exec
         exec_html = md_to_html_safe(micro_texts[0] if micro_texts else "No content")
@@ -656,32 +781,35 @@ def main():
     runtime_s = int(time.time() - t0)
 
     title = f"{BRAND_NAME} Report — {start_ts.strftime('%Y-%m-%d %H:%MZ')}"
-    html = (HTML_TEMPLATE
-            .replace("{{REPORT_TITLE}}", html_escape(title))
-            .replace("{{SUBTITLE}}", "Automated DFIR Intelligence Summary")
-            .replace("{{DETECTION_COUNT}}", str(det_count))
-            .replace("{{INTEGRITY}}", "ON" if cfg.integrity=="on" else "OFF")
-            .replace("{{MICRO_MODEL}}", html_escape(cfg.chunk_model))
-            .replace("{{FINAL_MODEL}}", html_escape(cfg.final_model if cfg.two_pass else cfg.chunk_model))
-            .replace("{{RUNTIME}}", f"{runtime_s}s")
-            .replace("{{COST}}", f"{total_cost:.6f}")
-            .replace("{{START_TS}}", start_ts.isoformat(timespec="seconds")+"Z")
-            .replace("{{END_TS}}", stop_ts.isoformat(timespec="seconds")+"Z")
-            .replace("{{EXEC_HTML}}", exec_html)
-            .replace("{{MICRO_CARDS}}", micro_cards)
-            .replace("{{IOC_BLOCK}}", ioc_block)
-            .replace("{{ENV_BLOCK}}", html_escape(env_block))
-            .replace("{{REPORT_CSS}}", REPORT_CSS)
-            .replace("{{FOOTER}}",
-                     "<p>Powered by <strong>ForenSynth AI™</strong> — Automated DFIR Intelligence Engine</p>"
-                     if cfg.branding=="on" else "")
-            )
+    html = (
+        HTML_TEMPLATE.replace("{{REPORT_TITLE}}", html_escape(title))
+        .replace("{{SUBTITLE}}", "Automated DFIR Intelligence Summary")
+        .replace("{{DETECTION_COUNT}}", str(det_count))
+        .replace("{{INTEGRITY}}", "ON" if cfg.integrity == "on" else "OFF")
+        .replace("{{MICRO_MODEL}}", html_escape(cfg.chunk_model))
+        .replace("{{FINAL_MODEL}}", html_escape(cfg.final_model if cfg.two_pass else cfg.chunk_model))
+        .replace("{{RUNTIME}}", f"{runtime_s}s")
+        .replace("{{COST}}", f"{total_cost:.6f}")
+        .replace("{{START_TS}}", start_ts.isoformat(timespec="seconds") + "Z")
+        .replace("{{END_TS}}", stop_ts.isoformat(timespec="seconds") + "Z")
+        .replace("{{EXEC_HTML}}", exec_html)
+        .replace("{{MICRO_CARDS}}", micro_cards)
+        .replace("{{IOC_BLOCK}}", ioc_block)
+        .replace("{{ENV_BLOCK}}", html_escape(env_block))
+        .replace("{{REPORT_CSS}}", REPORT_CSS)
+        .replace(
+            "{{FOOTER}}",
+            "<p>Powered by <strong>ForenSynth AI™</strong> — Automated DFIR Intelligence Engine</p>"
+            if cfg.branding == "on"
+            else "",
+        )
+    )
 
     # 6) Write outputs + archive + run log
     html_path = out_dir_date / f"forensynth_report_{start_ts.strftime('%Y-%m-%d')}.html"
-    md_path   = out_dir_date / f"forensynth_summary_{start_ts.strftime('%Y-%m-%d')}.md"
+    md_path = out_dir_date / f"forensynth_summary_{start_ts.strftime('%Y-%m-%d')}.md"
     md_path.write_text("## Executive Summary (see HTML for full formatting)\n\n", encoding="utf-8")
-    md_path.write_text(md_path.read_text(encoding="utf-8") + re.sub(r"<[^>]+>","",exec_html), encoding="utf-8")
+    md_path.write_text(md_path.read_text(encoding="utf-8") + re.sub(r"<[^>]+>", "", exec_html), encoding="utf-8")
     html_path.write_text(html, encoding="utf-8")
 
     ok(f"Report written: {html_path}")
@@ -691,9 +819,16 @@ def main():
     ok("Archived previous reports into /archive/YYYY-MM-DD/")
 
     runlog = out_dir_date.parent / "run_log.csv"
-    append_run_log(runlog, ts=start_ts.isoformat(timespec="seconds")+"Z", detections=det_count,
-                   runtime_s=runtime_s, cost=total_cost, integrity=cfg.integrity,
-                   chunk_model=cff(cfg.chunk_model), final_model=cff(cfg.final_model if cfg.two_pass else cfg.chunk_model))
+    append_run_log(
+        runlog,
+        ts=start_ts.isoformat(timespec="seconds") + "Z",
+        detections=det_count,
+        runtime_s=runtime_s,
+        cost=total_cost,
+        integrity=cfg.integrity,
+        chunk_model=cff(cfg.chunk_model),
+        final_model=cff(cfg.final_model if cfg.two_pass else cfg.chunk_model),
+    )
     ok(f"Run logged: {runlog}")
 
     # 7) Console cost details
@@ -703,9 +838,11 @@ def main():
     console.print(f"[cyan]Total cost: ${total_cost:.6f}[/cyan]")
     console.rule("[bold]Done[/bold]")
 
+
 def cff(s: str) -> str:
     # compact friendly format
-    return s.replace("gpt-5-","5-").replace("gpt-3.5-","3.5-")
+    return s.replace("gpt-5-", "5-").replace("gpt-3.5-", "3.5-")
+
 
 if __name__ == "__main__":
     main()

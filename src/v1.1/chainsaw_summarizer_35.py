@@ -68,6 +68,7 @@ td, th { border: 1px solid #eee; padding: .4rem .6rem; }
 blockquote { color: var(--muted); border-left: 3px solid #eee; margin: 0; padding: .25rem .75rem; }
 """
 
+
 # ---------------- Config ----------------
 @dataclass
 class AppConfig:
@@ -362,7 +363,13 @@ def _run(cmd: List[str], timeout: int, log_path: Optional[Path]) -> None:
 
 
 def run_chainsaw_json(
-    src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
 ) -> None:
     cmd = [
         "chainsaw",
@@ -382,7 +389,13 @@ def run_chainsaw_json(
 
 
 def run_chainsaw_jsonl(
-    src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
 ) -> None:
     cmd = [
         "chainsaw",
@@ -402,7 +415,13 @@ def run_chainsaw_jsonl(
 
 
 def run_chainsaw_capture_json_stdout(
-    src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
 ) -> None:
     cmd = [
         "chainsaw",
@@ -619,9 +638,7 @@ def _format_script(script: str, no_script: bool, truncate_script: int) -> str:
     return script or ""
 
 
-def build_chunk_prompt(
-    chunk_items: List[Dict[str, Any]], *, no_script: bool, truncate_script: int
-) -> str:
+def build_chunk_prompt(chunk_items: List[Dict[str, Any]], *, no_script: bool, truncate_script: int) -> str:
     header = (
         "You are a senior DFIR analyst. Summarize these Windows detection events succinctly. "
         "Group related items, highlight notable TTPs/tooling, and provide an executive summary plus actionable recommendations.\n\n"
@@ -630,9 +647,9 @@ def build_chunk_prompt(
     for i, det in enumerate(chunk_items, 1):
         ts = det.get("timestamp", "N/A")
         rule = det.get("name", "N/A")
-        doc = (((det.get("document") or {}).get("data") or {}).get("Event") or {})
-        event_id = ((doc.get("System") or {}).get("EventID") or "N/A")
-        script_raw = ((doc.get("EventData") or {}).get("ScriptBlockText") or "")
+        doc = ((det.get("document") or {}).get("data") or {}).get("Event") or {}
+        event_id = (doc.get("System") or {}).get("EventID") or "N/A"
+        script_raw = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
         script = _format_script(script_raw, no_script=no_script, truncate_script=truncate_script)
         mitre_tags = ", ".join(det.get("tags", []) or []) or "None"
         category = (det.get("logsource") or {}).get("category", "N/A")
@@ -744,9 +761,7 @@ def call_llm_chunked(
 
 
 # ---------------- Two-pass mode ----------------
-def build_micro_prompt(
-    chunk_items: List[Dict[str, Any]], *, include_script: bool, micro_truncate: int
-) -> str:
+def build_micro_prompt(chunk_items: List[Dict[str, Any]], *, include_script: bool, micro_truncate: int) -> str:
     header = (
         "Micro-summarize these detections for DFIR triage in <= 12 bullets total. "
         "Group similar items, name key TTPs (MITRE IDs if present), mention counts/timestamps if available. "
@@ -758,9 +773,9 @@ def build_micro_prompt(
         ts = det.get("timestamp", "N/A")
         rule = det.get("name", "N/A")
         tags = ", ".join(det.get("tags", []) or []) or "None"
-        doc = (((det.get("document") or {}).get("data") or {}).get("Event") or {})
-        eid = ((doc.get("System") or {}).get("EventID") or "N/A")
-        script_raw = ((doc.get("EventData") or {}).get("ScriptBlockText") or "")
+        doc = ((det.get("document") or {}).get("data") or {}).get("Event") or {}
+        eid = (doc.get("System") or {}).get("EventID") or "N/A"
+        script_raw = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
         snippet = ""
         if include_script and micro_truncate > 0 and script_raw:
             snippet = script_raw[:micro_truncate] + ("… [truncated]" if len(script_raw) > micro_truncate else "")
@@ -1037,7 +1052,7 @@ def main() -> None:
         if pdf_path:
             console.print(f"[green]✓ PDF:[/green] {pdf_path}")
         else:
-            console.print(f"[yellow]• PDF generation failed (install XeLaTeX or set PDF engine).[/yellow]")
+            console.print("[yellow]• PDF generation failed (install XeLaTeX or set PDF engine).[/yellow]")
     if html_path:
         console.print(f"[green]✓ HTML:[/green] {html_path}")
         if not cfg.css_path:

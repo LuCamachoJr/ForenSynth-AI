@@ -19,35 +19,52 @@ Requires:
 """
 
 from __future__ import annotations
-import argparse, json, math, os, re, sys, time, random, shutil, subprocess
+
+import argparse
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import pypandoc
+import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI
-from openai._exceptions import APIConnectionError, APIError, BadRequestError, RateLimitError
-import tiktoken
-import pypandoc
-
 from rich.console import Console
-from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 console = Console()
 
+
 # ─────────────────────────── UI helpers ───────────────────────────
-def ok(msg):   console.print(Panel.fit(f"[green]✔ {msg}[/green]"))
-def info(msg): console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]"))
-def die(msg):  console.print(Panel.fit(f"[red]✘ {msg}[/red]")); sys.exit(1)
+def ok(msg):
+    console.print(Panel.fit(f"[green]✔ {msg}[/green]"))
+
+
+def info(msg):
+    console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]"))
+
+
+def die(msg):
+    console.print(Panel.fit(f"[red]✘ {msg}[/red]"))
+    sys.exit(1)
+
 
 # ─────────────────────────── Pricing (per 1K tokens) ───────────────────────────
 PRICING = {
     "gpt-5-mini": {"in": 0.00025, "out": 0.00200},
-    "gpt-5":      {"in": 0.00125, "out": 0.01000},
+    "gpt-5": {"in": 0.00125, "out": 0.01000},
 }
 
 # ─────────────────────────── Prompts ───────────────────────────
@@ -61,6 +78,7 @@ FINAL_SYSTEM_PROMPT = (
     "Eliminate repetition, group by phases/TTPs, quantify scope where possible, "
     "and end with prioritized recommendations (High/Med/Low) and quick wins."
 )
+
 
 # ─────────────────────────── CLI ───────────────────────────
 @dataclass
@@ -86,13 +104,14 @@ class AppConfig:
     micro_include_script: bool
     final_max_input_tokens: int
 
+
 def parse_args() -> AppConfig:
     p = argparse.ArgumentParser(description="Chainsaw summarizer (fast, two-pass, adaptive)")
     p.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
     p.add_argument("--rules", type=Path, default=Path("~/tools/sigma/rules").expanduser())
     p.add_argument("--mapping", type=Path, default=Path("~/tools/chainsaw/sigma-event-logs-all.yml").expanduser())
     p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "chainsaw_summaries")
-    p.add_argument("--chunk-size", type=int, default=40)   # fewer API calls
+    p.add_argument("--chunk-size", type=int, default=40)  # fewer API calls
     p.add_argument("--max-chunks", type=int, default=100)
     p.add_argument("--make-html", action="store_true")
     p.add_argument("--make-pdf", action="store_true")
@@ -112,28 +131,46 @@ def parse_args() -> AppConfig:
 
     # fast preset
     if a.fast:
-        if a.rpm == 0: a.rpm = 60
-        if a.chunk_size < 40: a.chunk_size = 40
-        if a.llm_max_retries > 8 or a.llm_max_retries < 4: a.llm_max_retries = 6
-        if a.llm_timeout < 60: a.llm_timeout = 90
-        if not a.micro_include_script: a.micro_include_script = True
+        if a.rpm == 0:
+            a.rpm = 60
+        if a.chunk_size < 40:
+            a.chunk_size = 40
+        if a.llm_max_retries > 8 or a.llm_max_retries < 4:
+            a.llm_max_retries = 6
+        if a.llm_timeout < 60:
+            a.llm_timeout = 90
+        if not a.micro_include_script:
+            a.micro_include_script = True
 
     return AppConfig(
-        evtx_root=a.evtx_root, rules=a.rules, mapping=a.mapping, outdir=a.outdir,
-        chunk_size=max(1, a.chunk_size), max_chunks=max(1, a.max_chunks),
-        make_html=a.make_html, make_pdf=a.make_pdf, two_pass=a.two_pass,
-        chunk_model=a.chunk_model, final_model=a.final_model,
-        llm_timeout=a.llm_timeout, llm_max_retries=a.llm_max_retries,
-        llm_temperature=a.llm_temperature, rpm=a.rpm, micro_workers=a.micro_workers,
-        fast=a.fast, micro_truncate=max(0, a.micro_truncate),
+        evtx_root=a.evtx_root,
+        rules=a.rules,
+        mapping=a.mapping,
+        outdir=a.outdir,
+        chunk_size=max(1, a.chunk_size),
+        max_chunks=max(1, a.max_chunks),
+        make_html=a.make_html,
+        make_pdf=a.make_pdf,
+        two_pass=a.two_pass,
+        chunk_model=a.chunk_model,
+        final_model=a.final_model,
+        llm_timeout=a.llm_timeout,
+        llm_max_retries=a.llm_max_retries,
+        llm_temperature=a.llm_temperature,
+        rpm=a.rpm,
+        micro_workers=a.micro_workers,
+        fast=a.fast,
+        micro_truncate=max(0, a.micro_truncate),
         micro_include_script=a.micro_include_script,
         final_max_input_tokens=max(4000, a.final_max_input_tokens),
     )
+
 
 # ─────────────────────────── EVTX discovery ───────────────────────────
 def ensure_chainsaw():
     if shutil.which("chainsaw") is None:
         die("chainsaw not found in PATH")
+
 
 def newest_container(root: Path) -> Path:
     if not root.exists():
@@ -145,6 +182,7 @@ def newest_container(root: Path) -> Path:
     ok(f"Using latest EVTX directory: {latest}")
     return latest
 
+
 def run_chainsaw(src_dir: Path, out_path: Path, rules: Path, mapping: Path):
     info("Running Chainsaw hunt…")
     sigma_root = str(Path(rules).parent)
@@ -152,14 +190,22 @@ def run_chainsaw(src_dir: Path, out_path: Path, rules: Path, mapping: Path):
     if not evtx_files:
         die(f"No .evtx files found in {src_dir}")
     cmd = [
-        "chainsaw", "hunt", str(src_dir),
-        "--mapping", str(mapping),
-        "--rule", str(rules),
-        "-s", sigma_root,
-        "--json", "--output", str(out_path)
+        "chainsaw",
+        "hunt",
+        str(src_dir),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules),
+        "-s",
+        sigma_root,
+        "--json",
+        "--output",
+        str(out_path),
     ]
     subprocess.run(cmd, check=True)
     ok("Chainsaw hunt completed.")
+
 
 # ─────────────────────────── Detections loader (adaptive) ───────────────────────────
 def load_detections(path: Path) -> List[Dict[str, Any]]:
@@ -173,6 +219,7 @@ def load_detections(path: Path) -> List[Dict[str, Any]]:
         return data
     return []
 
+
 # ─────────────────────────── Token utils ───────────────────────────
 def get_encoder():
     try:
@@ -180,69 +227,81 @@ def get_encoder():
     except Exception:
         return tiktoken.get_encoding("cl100k_base")
 
+
 def est_tokens(enc, text: str) -> int:
     try:
         return len(enc.encode(text))
     except Exception:
-        return max(1, len(text)//4)
+        return max(1, len(text) // 4)
+
 
 # ─────────────────────────── LLM plumbing ───────────────────────────
 class RateLimiter:
     def __init__(self, rpm: int):
         self.interval = 60.0 / rpm if rpm > 0 else 0.0
         self.next = 0.0
+
     def wait(self):
-        if self.interval <= 0: return
+        if self.interval <= 0:
+            return
         now = time.time()
         if now < self.next:
             time.sleep(self.next - now)
         self.next = max(now, self.next) + self.interval
 
-def backoff_sleep(i: int):
-    time.sleep(min(30.0, (1.5 ** i) + random.uniform(0, 0.3)))
 
-def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
-             temperature: float, timeout_s: int, retries: int) -> str:
+def backoff_sleep(i: int):
+    time.sleep(min(30.0, (1.5**i) + random.uniform(0, 0.3)))
+
+
+def call_llm(
+    client: OpenAI, model: str, system_prompt: str, user_prompt: str, temperature: float, timeout_s: int, retries: int
+) -> str:
     # Ensure temperature is compatible with GPT-5 family
     safe_temp = 1.0 if model.startswith("gpt-5") else temperature
     for i in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=safe_temp,
-                timeout=timeout_s
+                timeout=timeout_s,
             )
             return resp.choices[0].message.content or ""
         except Exception as e:
-            warn(f"LLM call failed (attempt {i+1}/{retries}): {e}")
+            warn(f"LLM call failed (attempt {i + 1}/{retries}): {e}")
             backoff_sleep(i)
     die(f"LLM call failed after {retries} retries.")
+
 
 # ─────────────────────────── Prompt builders ───────────────────────────
 def format_script_snippet(det: Dict[str, Any], include: bool, limit: int) -> str:
     if not include or limit <= 0:
         return ""
-    script = (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData", {}).get("ScriptBlockText", "")
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {})
+        .get("EventData", {})
+        .get("ScriptBlockText", "")
+    )
     if not isinstance(script, str) or not script:
         return ""
-    return (script[:limit] + ("… [truncated]" if len(script) > limit else ""))
+    return script[:limit] + ("… [truncated]" if len(script) > limit else "")
+
 
 def build_micro_prompt(block: List[Dict[str, Any]], include_script: bool, micro_truncate: int) -> str:
     lines = [
         "Micro-summarize these detections for DFIR triage in <= 12 bullets total.",
         "Group similar items, name key TTPs (MITRE IDs if present), mention counts/timestamps if available.",
         "No fluff, no repetition.",
-        "Output bullets only."
+        "Output bullets only.",
     ]
     for det in block:
         name = det.get("name") or (det.get("rule") or {}).get("title") or "Untitled"
         ts = det.get("timestamp", "N/A")
         tags = ", ".join(det.get("tags", []) or []) or "None"
-        eid = (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "N/A")
+        eid = (
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "N/A")
+        )
         snippet = format_script_snippet(det, include_script, micro_truncate)
         line = f"- [{ts}] {name} (EventID {eid}; Tags: {tags})"
         if snippet:
@@ -250,13 +309,15 @@ def build_micro_prompt(block: List[Dict[str, Any]], include_script: bool, micro_
         lines.append(line)
     return "\n".join(lines)
 
+
 def build_final_prompt(micro_sections: List[str]) -> str:
     return (
         "Merge the following micro-summaries into one executive DFIR report. "
         "Eliminate duplicates, group themes, and produce:\n"
-        "1) Executive Summary\n2) Observed Activity (grouped)\n3) Key TTPs/Techniques\n4) Risk Assessment\n5) Actionable Recommendations (High/Med/Low)\n\n" +
-        "\n\n---\n\n".join(micro_sections)
+        "1) Executive Summary\n2) Observed Activity (grouped)\n3) Key TTPs/Techniques\n4) Risk Assessment\n5) Actionable Recommendations (High/Med/Low)\n\n"
+        + "\n\n---\n\n".join(micro_sections)
     )
+
 
 def build_chunk_prompt(block: List[Dict[str, Any]]) -> str:
     head = "Summarize these detections succinctly, group related behavior, and give clear findings with recommendations.\n\n"
@@ -265,21 +326,34 @@ def build_chunk_prompt(block: List[Dict[str, Any]]) -> str:
         name = det.get("name") or (det.get("rule") or {}).get("title") or "Untitled"
         ts = det.get("timestamp", "N/A")
         tags = ", ".join(det.get("tags", []) or []) or "None"
-        eid = (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "N/A")
+        eid = (
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "N/A")
+        )
         buf.append(f"{i}. {name} — Time: {ts} — EventID: {eid} — Tags: {tags}")
     return "\n".join(buf)
+
 
 # ─────────────────────────── Summarization flows ───────────────────────────
 def chunker(lst: List[Any], size: int) -> Iterable[List[Any]]:
     for i in range(0, len(lst), size):
-        yield lst[i:i+size]
+        yield lst[i : i + size]
 
-def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]],
-                   model: str, temperature: float, timeout_s: int, retries: int,
-                   include_script: bool, micro_truncate: int, rpm: int, workers: int) -> Tuple[List[str], int, int]:
+
+def micro_parallel(
+    client: OpenAI,
+    blocks: List[List[Dict[str, Any]]],
+    model: str,
+    temperature: float,
+    timeout_s: int,
+    retries: int,
+    include_script: bool,
+    micro_truncate: int,
+    rpm: int,
+    workers: int,
+) -> Tuple[List[str], int, int]:
     enc = get_encoder()
     limiter = RateLimiter(rpm)
-    out_sections: List[Optional[str]] = [None]*len(blocks)
+    out_sections: List[Optional[str]] = [None] * len(blocks)
     total_in = total_out = 0
 
     def _work(i: int, block: List[Dict[str, Any]]) -> Tuple[int, str, int, int]:
@@ -290,26 +364,40 @@ def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]],
         tout = est_tokens(enc, content)
         return i, content, tin, tout
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Micro[/bold]"), BarColumn(),
-                  TextColumn("[progress.completed]/[progress.total]"),
-                  TimeElapsedColumn(), transient=True) as prog:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Micro[/bold]"),
+        BarColumn(),
+        TextColumn("[progress.completed]/[progress.total]"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as prog:
         task = prog.add_task("micro", total=len(blocks))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = [ex.submit(_work, i, block) for i, block in enumerate(blocks)]
             for f in as_completed(futures):
                 i, content, tin, tout = f.result()
-                out_sections[i] = f"## Micro {i+1}\n{content}"
-                total_in += tin; total_out += tout
+                out_sections[i] = f"## Micro {i + 1}\n{content}"
+                total_in += tin
+                total_out += tout
                 prog.update(task, advance=1)
 
     return [s or "" for s in out_sections], total_in, total_out
 
-def single_pass_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]],
-                         model: str, temperature: float, timeout_s: int, retries: int,
-                         rpm: int, workers: int) -> Tuple[str, int, int]:
+
+def single_pass_parallel(
+    client: OpenAI,
+    blocks: List[List[Dict[str, Any]]],
+    model: str,
+    temperature: float,
+    timeout_s: int,
+    retries: int,
+    rpm: int,
+    workers: int,
+) -> Tuple[str, int, int]:
     enc = get_encoder()
     limiter = RateLimiter(rpm)
-    sections: List[Optional[str]] = [None]*len(blocks)
+    sections: List[Optional[str]] = [None] * len(blocks)
     total_in = total_out = 0
 
     def _work(i: int, block: List[Dict[str, Any]]) -> Tuple[int, str, int, int]:
@@ -320,16 +408,22 @@ def single_pass_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]],
         tout = est_tokens(enc, content)
         return i, content, tin, tout
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Chunks[/bold]"), BarColumn(),
-                  TextColumn("[progress.completed]/[progress.total]"),
-                  TimeElapsedColumn(), transient=True) as prog:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Chunks[/bold]"),
+        BarColumn(),
+        TextColumn("[progress.completed]/[progress.total]"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as prog:
         task = prog.add_task("chunks", total=len(blocks))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = [ex.submit(_work, i, block) for i, block in enumerate(blocks)]
             for f in as_completed(futures):
                 i, content, tin, tout = f.result()
-                sections[i] = f"### Chunk {i+1}\n\n{content}\n"
-                total_in += tin; total_out += tout
+                sections[i] = f"### Chunk {i + 1}\n\n{content}\n"
+                total_in += tin
+                total_out += tout
                 prog.update(task, advance=1)
 
     head = (
@@ -340,14 +434,27 @@ def single_pass_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]],
     )
     return head + "".join([s or "" for s in sections]), total_in, total_out
 
+
 def two_pass_summarize(client: OpenAI, detections: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, int, int]:
     blocks = list(chunker(detections, cfg.chunk_size))
-    workers = min(len(blocks), (os.cpu_count() or 4)*2) if str(cfg.micro_workers).lower()=="auto" else max(1, int(cfg.micro_workers))
+    workers = (
+        min(len(blocks), (os.cpu_count() or 4) * 2)
+        if str(cfg.micro_workers).lower() == "auto"
+        else max(1, int(cfg.micro_workers))
+    )
 
     # Micro (parallel) on mini
     micro_sections, mi_in, mi_out = micro_parallel(
-        client, blocks, cfg.chunk_model, cfg.llm_temperature, cfg.llm_timeout, cfg.llm_max_retries,
-        cfg.micro_include_script, cfg.micro_truncate, cfg.rpm, workers
+        client,
+        blocks,
+        cfg.chunk_model,
+        cfg.llm_temperature,
+        cfg.llm_timeout,
+        cfg.llm_max_retries,
+        cfg.micro_include_script,
+        cfg.micro_truncate,
+        cfg.rpm,
+        workers,
     )
 
     # Final merge (single call) on gpt-5
@@ -361,7 +468,8 @@ def two_pass_summarize(client: OpenAI, detections: List[Dict[str, Any]], cfg: Ap
         running = est_tokens(enc, FINAL_SYSTEM_PROMPT)
         for tk, s in pairs:
             if running + tk <= cfg.final_max_input_tokens:
-                keep.append(s); running += tk
+                keep.append(s)
+                running += tk
             else:
                 break
         if not keep:
@@ -370,7 +478,15 @@ def two_pass_summarize(client: OpenAI, detections: List[Dict[str, Any]], cfg: Ap
 
     limiter = RateLimiter(cfg.rpm)
     limiter.wait()
-    final = call_llm(client, cfg.final_model, FINAL_SYSTEM_PROMPT, final_user, cfg.llm_temperature, cfg.llm_timeout, cfg.llm_max_retries)
+    final = call_llm(
+        client,
+        cfg.final_model,
+        FINAL_SYSTEM_PROMPT,
+        final_user,
+        cfg.llm_temperature,
+        cfg.llm_timeout,
+        cfg.llm_max_retries,
+    )
     fi_in = est_tokens(enc, FINAL_SYSTEM_PROMPT) + est_tokens(enc, final_user)
     fi_out = est_tokens(enc, final)
 
@@ -385,6 +501,7 @@ def two_pass_summarize(client: OpenAI, detections: List[Dict[str, Any]], cfg: Ap
     )
     appendix = "\n\n---\n\n## Appendix: Micro-Summaries\n\n" + "\n\n".join(micro_sections)
     return head + final + appendix, (mi_in + fi_in), (mi_out + fi_out)
+
 
 # ─────────────────────────── Output helpers ───────────────────────────
 DEFAULT_CSS = """
@@ -407,12 +524,16 @@ td, th { border: 1px solid #eee; padding: .4rem .6rem; }
 blockquote { color: var(--muted); border-left: 3px solid #eee; margin: 0; padding: .25rem .75rem; }
 """
 
+
 def sanitize_md_for_pandoc(text: str) -> str:
     if text.startswith("---\n"):
         text = "\n" + text
     return re.sub(r"(?m)^\s*---\s*$", "<hr />", text)
 
-def write_reports(outdir: Path, md_text: str, make_html: bool, make_pdf: bool) -> Tuple[Path, Optional[Path], Optional[Path]]:
+
+def write_reports(
+    outdir: Path, md_text: str, make_html: bool, make_pdf: bool
+) -> Tuple[Path, Optional[Path], Optional[Path]]:
     outdir.mkdir(parents=True, exist_ok=True)
     today = datetime.today().strftime("%Y-%m-%d")
     md_path = outdir / f"chainsaw_summary_{today}.md"
@@ -422,13 +543,23 @@ def write_reports(outdir: Path, md_text: str, make_html: bool, make_pdf: bool) -
     pdf_path = None
     html_css_path = outdir / "report.css"
     if make_html:
-        if not html_css_path.exists(): html_css_path.write_text(DEFAULT_CSS, encoding="utf-8")
+        if not html_css_path.exists():
+            html_css_path.write_text(DEFAULT_CSS, encoding="utf-8")
         html_path = outdir / f"chainsaw_summary_{today}.html"
         try:
             pypandoc.convert_text(
                 sanitize_md_for_pandoc(md_text),
-                to="html", format="gfm", outputfile=str(html_path),
-                extra_args=["--standalone","--toc","--toc-depth=3", f"--css={html_css_path}","--metadata","title=DFIR Chainsaw Summary (LLM)"]
+                to="html",
+                format="gfm",
+                outputfile=str(html_path),
+                extra_args=[
+                    "--standalone",
+                    "--toc",
+                    "--toc-depth=3",
+                    f"--css={html_css_path}",
+                    "--metadata",
+                    "title=DFIR Chainsaw Summary (LLM)",
+                ],
             )
         except OSError:
             info("HTML generation skipped (pandoc missing).")
@@ -439,8 +570,10 @@ def write_reports(outdir: Path, md_text: str, make_html: bool, make_pdf: bool) -
         try:
             pypandoc.convert_text(
                 sanitize_md_for_pandoc(md_text),
-                to="pdf", format="gfm", outputfile=str(pdf_path),
-                extra_args=["--standalone","--pdf-engine=xelatex","--metadata","title=DFIR Chainsaw Summary (LLM)"]
+                to="pdf",
+                format="gfm",
+                outputfile=str(pdf_path),
+                extra_args=["--standalone", "--pdf-engine=xelatex", "--metadata", "title=DFIR Chainsaw Summary (LLM)"],
             )
         except OSError:
             info("PDF generation skipped (xelatex/pandoc missing).")
@@ -448,20 +581,24 @@ def write_reports(outdir: Path, md_text: str, make_html: bool, make_pdf: bool) -
 
     return md_path, html_path, pdf_path
 
-def estimate_cost(usages: Dict[str, Tuple[int,int]]) -> Tuple[float, List[str]]:
-    total = 0.0; lines = []
+
+def estimate_cost(usages: Dict[str, Tuple[int, int]]) -> Tuple[float, List[str]]:
+    total = 0.0
+    lines = []
     for m, (tin, tout) in usages.items():
-        p = PRICING.get(m, {"in":0.0, "out":0.0})
-        cost = (tin/1000.0)*p["in"] + (tout/1000.0)*p["out"]
+        p = PRICING.get(m, {"in": 0.0, "out": 0.0})
+        cost = (tin / 1000.0) * p["in"] + (tout / 1000.0) * p["out"]
         total += cost
         lines.append(f"- {m}: in={tin}, out={tout} → ${cost:.6f} (in {p['in']}/k, out {p['out']}/k)")
     return round(total, 6), lines
+
 
 # ─────────────────────────── Main ───────────────────────────
 def main():
     load_dotenv()
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: die("OPENAI_API_KEY not set")
+    if not api_key:
+        die("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
     cfg = parse_args()
 
@@ -505,13 +642,17 @@ def main():
     in_tokens = out_tokens = 0
     if cfg.two_pass:
         md, in_tokens, out_tokens = two_pass_summarize(client, detections, cfg)
-        usage = {cfg.chunk_model: (0,0), cfg.final_model: (0,0)}  # approximate split comes from two_pass returns
+        usage = {cfg.chunk_model: (0, 0), cfg.final_model: (0, 0)}  # approximate split comes from two_pass returns
         # Rough attribution: assume 70% tokens in micro on mini, 30% in final on gpt-5
-        usage[cfg.chunk_model] = (int(in_tokens*0.7), int(out_tokens*0.7))
+        usage[cfg.chunk_model] = (int(in_tokens * 0.7), int(out_tokens * 0.7))
         usage[cfg.final_model] = (in_tokens - usage[cfg.chunk_model][0], out_tokens - usage[cfg.chunk_model][1])
     else:
         blocks = list(chunker(detections, cfg.chunk_size))
-        workers = min(len(blocks), (os.cpu_count() or 4)*2) if str(cfg.micro_workers).lower()=="auto" else max(1, int(cfg.micro_workers))
+        workers = (
+            min(len(blocks), (os.cpu_count() or 4) * 2)
+            if str(cfg.micro_workers).lower() == "auto"
+            else max(1, int(cfg.micro_workers))
+        )
         md, in_tokens, out_tokens = single_pass_parallel(
             client, blocks, cfg.chunk_model, cfg.llm_temperature, cfg.llm_timeout, cfg.llm_max_retries, cfg.rpm, workers
         )
@@ -527,11 +668,17 @@ def main():
 
     total_cost, lines = estimate_cost(usage)
     console.print(f"[green]✓ Markdown:[/green] {md_path}")
-    if html_path: console.print(f"[green]✓ HTML:[/green] {html_path}")
-    if pdf_path:  console.print(f"[green]✓ PDF:[/green] {pdf_path}")
-    console.print(f"[cyan]🧠 Tokens used (est):[/cyan] in+out={in_tokens + out_tokens} (in={in_tokens}, out={out_tokens})")
-    for ln in lines: console.print(f"[cyan]{ln}[/cyan]")
+    if html_path:
+        console.print(f"[green]✓ HTML:[/green] {html_path}")
+    if pdf_path:
+        console.print(f"[green]✓ PDF:[/green] {pdf_path}")
+    console.print(
+        f"[cyan]🧠 Tokens used (est):[/cyan] in+out={in_tokens + out_tokens} (in={in_tokens}, out={out_tokens})"
+    )
+    for ln in lines:
+        console.print(f"[cyan]{ln}[/cyan]")
     console.print(f"[cyan]💸 Estimated total cost:[/cyan] ${total_cost}")
+
 
 if __name__ == "__main__":
     main()

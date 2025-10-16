@@ -5,13 +5,14 @@ import argparse
 import json
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
-import time
-import random
 import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,20 +21,19 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pypandoc
 import tiktoken
 from dotenv import load_dotenv
-from openai import OpenAI
 from openai import (
     APIConnectionError,
     APIError,
-    BadRequestError,
-    RateLimitError,
     APITimeoutError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
 )
 from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 # Optional YAML for pricing files
 try:
@@ -48,14 +48,14 @@ CHUNK_MODEL = os.getenv("CHUNK_MODEL", "gpt-5-mini")
 FINAL_MODEL = os.getenv("FINAL_MODEL", "gpt-5")
 
 MAX_LLM_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "8"))
-REQ_TIMEOUT_S   = int(os.getenv("LLM_TIMEOUT", "30"))  # tighter default
+REQ_TIMEOUT_S = int(os.getenv("LLM_TIMEOUT", "30"))  # tighter default
 # Default 1.0; many models only accept default. We omit temp when == 1.0.
-TEMPERATURE     = float(os.getenv("LLM_TEMPERATURE", "1"))
+TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "1"))
 
 # Per-model pricing (per **1K** tokens)
 PRICING = {
     "gpt-5-mini": {"in": 0.00025, "out": 0.00200},
-    "gpt-5":      {"in": 0.00125, "out": 0.01000},
+    "gpt-5": {"in": 0.00125, "out": 0.01000},
 }
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -89,6 +89,7 @@ table { border-collapse: collapse; }
 td, th { border: 1px solid #eee; padding: .4rem .6rem; }
 blockquote { color: var(--muted); border-left: 3px solid #eee; margin: 0; padding: .25rem .75rem; }
 """
+
 
 # ───────────────────────────── Config Model ───────────────────────────────
 @dataclass
@@ -145,26 +146,41 @@ class AppConfig:
     micro_max_seconds: int
     abort_after_minutes: int
 
+
 # ───────────────────────────── Helpers/IO ────────────────────────────────
 class LoaderError(Exception):
     pass
 
+
 def die(msg: str, code: int = 1) -> None:
-    console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED)); sys.exit(code)
+    console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED))
+    sys.exit(code)
+
 
 def ok(msg: str) -> None:
     console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
 
+
 def info(msg: str) -> None:
     console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
+
 
 # ──────────────────────────────── CLI ────────────────────────────────────
 def parse_args() -> AppConfig:
     p = argparse.ArgumentParser(description="AI Chainsaw Summary Generator (mini→5 two-pass capable)")
-    p.add_argument("--hunt", action="store_true", default=True, help="Run chainsaw hunt before summarizing (default: on)")
+    p.add_argument(
+        "--hunt", action="store_true", default=True, help="Run chainsaw hunt before summarizing (default: on)"
+    )
     p.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
-    p.add_argument("--evtx-scope", choices=["dir", "file"], default="dir", help="Hunt the latest date directory or a single file.")
-    p.add_argument("--prefer-logs", type=str, default="PowerShell-Operational.evtx,Security.evtx", help="Comma list to try in file mode.")
+    p.add_argument(
+        "--evtx-scope", choices=["dir", "file"], default="dir", help="Hunt the latest date directory or a single file."
+    )
+    p.add_argument(
+        "--prefer-logs",
+        type=str,
+        default="PowerShell-Operational.evtx,Security.evtx",
+        help="Comma list to try in file mode.",
+    )
     p.add_argument("--max-detections", type=int, default=1000, help="0 = no cap")
     p.add_argument("--chunk-size", type=int, default=25)
     p.add_argument("--max-chunks", type=int, default=100)
@@ -172,7 +188,9 @@ def parse_args() -> AppConfig:
     p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "chainsaw_summaries")
     p.add_argument("--rules", type=Path, default=Path("chainsaw/rules"))
     p.add_argument("--mapping", type=Path, default=Path("chainsaw/sigma-mapping.yml"))
-    p.add_argument("--sigma-root", type=Path, default=None, help="Sigma repo root; defaults to parent of --rules if named 'rules'.")
+    p.add_argument(
+        "--sigma-root", type=Path, default=None, help="Sigma repo root; defaults to parent of --rules if named 'rules'."
+    )
     p.add_argument("--chainsaw-format", choices=["auto", "json", "jsonl"], default="auto")
     p.add_argument("--log-chainsaw", type=Path, default=None)
     p.add_argument("--latex", action="store_true")
@@ -193,8 +211,12 @@ def parse_args() -> AppConfig:
     p.add_argument("--truncate-script", type=int, default=0, help="If >0, keep only first N chars of ScriptBlockText")
     # Two-pass
     p.add_argument("--two-pass", action="store_true", help="Enable micro → final two-pass summarization")
-    p.add_argument("--micro-truncate", type=int, default=200, help="Chars of ScriptBlockText to keep in micro pass (0=omit)")
-    p.add_argument("--micro-include-script", action="store_true", help="Include truncated ScriptBlockText in micro pass")
+    p.add_argument(
+        "--micro-truncate", type=int, default=200, help="Chars of ScriptBlockText to keep in micro pass (0=omit)"
+    )
+    p.add_argument(
+        "--micro-include-script", action="store_true", help="Include truncated ScriptBlockText in micro pass"
+    )
     p.add_argument("--final-max-input-tokens", type=int, default=20000, help="Guardrail for final merge input tokens")
     # LLM models & runtime
     p.add_argument("--chunk-model", default=CHUNK_MODEL, help="Model for chunk/micro passes (default: gpt-5-mini)")
@@ -207,10 +229,16 @@ def parse_args() -> AppConfig:
     p.add_argument("--llm-seed", type=int, default=None, help="Optional seed for reproducibility (if supported).")
     # Streaming + parallelism + perf
     p.add_argument("--stream", action="store_true", help="Stream model output for responsiveness (serial only).")
-    p.add_argument("--micro-workers", type=str, default="1", help="'auto' or integer >=1. Auto = 2*CPU, capped by chunk count.")
+    p.add_argument(
+        "--micro-workers", type=str, default="1", help="'auto' or integer >=1. Auto = 2*CPU, capped by chunk count."
+    )
     p.add_argument("--rpm", type=int, default=0, help="Max requests per minute for micro-pass (0 = unlimited).")
-    p.add_argument("--micro-max-seconds", type=int, default=0, help="Skip any micro call exceeding N seconds (0 = no cap).")
-    p.add_argument("--abort-after-minutes", type=int, default=0, help="Stop entire run after N minutes; write partials.")
+    p.add_argument(
+        "--micro-max-seconds", type=int, default=0, help="Skip any micro call exceeding N seconds (0 = no cap)."
+    )
+    p.add_argument(
+        "--abort-after-minutes", type=int, default=0, help="Stop entire run after N minutes; write partials."
+    )
 
     a = p.parse_args()
     sigma_root = a.sigma_root or (a.rules.parent if a.rules.name.lower() == "rules" else a.rules)
@@ -219,7 +247,7 @@ def parse_args() -> AppConfig:
     # Resolve micro_workers
     if str(a.micro_workers).lower() == "auto":
         try:
-            import os as _os
+
             cpu = max(1, os.cpu_count() or 1)  # type: ignore
         except Exception:
             cpu = 2
@@ -273,11 +301,13 @@ def parse_args() -> AppConfig:
         abort_after_minutes=max(0, a.abort_after_minutes),
     )
 
+
 # ───────────────────────── Pricing Overrides ─────────────────────────────
 def _load_pricing_from_file(path: Path) -> Dict[str, Dict[str, float]]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() in {".yml", ".yaml"}:
-        if yaml is None: raise RuntimeError("PyYAML not installed; use JSON or install pyyaml.")
+        if yaml is None:
+            raise RuntimeError("PyYAML not installed; use JSON or install pyyaml.")
         data = yaml.safe_load(text)
     else:
         data = json.loads(text)
@@ -285,40 +315,56 @@ def _load_pricing_from_file(path: Path) -> Dict[str, Dict[str, float]]:
         raise ValueError("Pricing file must be a mapping model -> {in,out}.")
     return data
 
-def load_pricing(defaults: Dict[str, Dict[str, float]], *, file_path: Optional[Path], inline_json: Optional[str]) -> Dict[str, Dict[str, float]]:
+
+def load_pricing(
+    defaults: Dict[str, Dict[str, float]], *, file_path: Optional[Path], inline_json: Optional[str]
+) -> Dict[str, Dict[str, float]]:
     merged = {**defaults}
     env_json = os.getenv("PRICING_JSON")
     sources: List[Tuple[str, Optional[Dict[str, Any]]]] = []
     if env_json:
-        try: sources.append(("env:PRICING_JSON", json.loads(env_json)))
-        except Exception as e: raise RuntimeError(f"Invalid PRICING_JSON: {e}")
+        try:
+            sources.append(("env:PRICING_JSON", json.loads(env_json)))
+        except Exception as e:
+            raise RuntimeError(f"Invalid PRICING_JSON: {e}")
     if file_path:
-        try: sources.append((f"file:{file_path}", _load_pricing_from_file(file_path)))
-        except Exception as e: raise RuntimeError(f"Failed loading pricing file: {e}")
+        try:
+            sources.append((f"file:{file_path}", _load_pricing_from_file(file_path)))
+        except Exception as e:
+            raise RuntimeError(f"Failed loading pricing file: {e}")
     if inline_json:
-        try: sources.append(("cli:--pricing-json", json.loads(inline_json)))
-        except Exception as e: raise RuntimeError(f"Invalid --pricing-json: {e}")
+        try:
+            sources.append(("cli:--pricing-json", json.loads(inline_json)))
+        except Exception as e:
+            raise RuntimeError(f"Invalid --pricing-json: {e}")
     for label, data in sources:
-        if not data: continue
+        if not data:
+            continue
         for model, vals in data.items():
             if not isinstance(vals, dict) or "in" not in vals or "out" not in vals:
                 raise RuntimeError(f"Pricing entry for '{model}' in {label} must contain 'in' and 'out'.")
             merged[model] = {"in": float(vals["in"]), "out": float(vals["out"])}
     return merged
 
+
 def validate_pricing_for_usage(pricing: Dict[str, Dict[str, float]], used_models: List[str]) -> None:
     missing = [m for m in used_models if m not in pricing]
     if missing:
-        raise RuntimeError(f"Pricing missing for models: {', '.join(missing)}. Add via --pricing-file/--pricing-json/PRICING_JSON.")
+        raise RuntimeError(
+            f"Pricing missing for models: {', '.join(missing)}. Add via --pricing-file/--pricing-json/PRICING_JSON."
+        )
+
 
 # ───────────────────────── Sysmon + Environment ───────────────────────────
 def load_sysmon_info(path: Path) -> Optional[Dict[str, Any]]:
     try:
-        if not path.exists(): return None
+        if not path.exists():
+            return None
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
 
 def build_environment_md(sysmon: Optional[Dict[str, Any]]) -> str:
     present = sysmon is not None
@@ -333,10 +379,12 @@ def build_environment_md(sysmon: Optional[Dict[str, Any]]) -> str:
         lines.append("- Lab uses SwiftOnSecurity Sysmon config for high-signal events.")
     return "\n".join(lines) + "\n\n---\n"
 
+
 # ───────────────────────── Chainsaw Utilities ─────────────────────────────
 def ensure_chainsaw_available() -> None:
     if shutil.which("chainsaw") is None:
         die("chainsaw not found in PATH.")
+
 
 def validate_sigma_root(sigma_root: Path) -> Path:
     sr = sigma_root.resolve()
@@ -345,34 +393,42 @@ def validate_sigma_root(sigma_root: Path) -> Path:
     ok(f"Using Sigma root: {sr}")
     return sr
 
+
 def resolve_rules_and_mapping(rules_dir: Path, mapping: Path) -> Tuple[Path, Path]:
     home = Path.home()
     script_dir = Path(__file__).resolve().parent
 
     def uniq(seq: List[Path]) -> List[Path]:
-        seen = set(); out: List[Path] = []
+        seen = set()
+        out: List[Path] = []
         for p in seq:
             rp = (Path.cwd() / p if not p.is_absolute() else p).resolve()
-            if rp not in seen: out.append(rp); seen.add(rp)
+            if rp not in seen:
+                out.append(rp)
+                seen.add(rp)
         return out
 
-    rules_candidates = uniq([
-        rules_dir,
-        script_dir / "chainsaw" / "rules",
-        home / "tools" / "sigma" / "rules",
-        Path("/usr/share/chainsaw/rules"),
-        Path("/usr/local/share/chainsaw/rules"),
-    ])
+    rules_candidates = uniq(
+        [
+            rules_dir,
+            script_dir / "chainsaw" / "rules",
+            home / "tools" / "sigma" / "rules",
+            Path("/usr/share/chainsaw/rules"),
+            Path("/usr/local/share/chainsaw/rules"),
+        ]
+    )
 
-    mapping_candidates = uniq([
-        home / "tools" / "chainsaw" / "mappings" / "sigma-windows.yml",
-        home / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
-        mapping,
-        script_dir / "chainsaw" / "sigma-mapping.yml",
-        Path("/usr/share/chainsaw/sigma-mapping.yml"),
-        Path("/usr/local/share/chainsaw/sigma-mapping.yml"),
-        home / "tools" / "chainsaw" / "mapping.yml",
-    ])
+    mapping_candidates = uniq(
+        [
+            home / "tools" / "chainsaw" / "mappings" / "sigma-windows.yml",
+            home / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+            mapping,
+            script_dir / "chainsaw" / "sigma-mapping.yml",
+            Path("/usr/share/chainsaw/sigma-mapping.yml"),
+            Path("/usr/local/share/chainsaw/sigma-mapping.yml"),
+            home / "tools" / "chainsaw" / "mapping.yml",
+        ]
+    )
 
     rules_found = next((p for p in rules_candidates if p.is_dir()), None)
     mapping_found = next((p for p in mapping_candidates if p.is_file()), None)
@@ -393,12 +449,16 @@ def resolve_rules_and_mapping(rules_dir: Path, mapping: Path) -> Tuple[Path, Pat
     ok(f"Using Chainsaw mapping: {mapping_found}")
     return rules_found, mapping_found
 
+
 def find_latest_container(root: Path) -> Path:
-    if not root.exists(): die(f"EVTX root not found: {root}")
+    if not root.exists():
+        die(f"EVTX root not found: {root}")
     dirs = [p for p in root.iterdir() if p.is_dir()]
-    if not dirs: die(f"No subfolders under {root}")
+    if not dirs:
+        die(f"No subfolders under {root}")
     latest = max(dirs, key=lambda p: p.stat().st_mtime)
     return latest
+
 
 def resolve_evtx_source(root: Path, scope: str, prefer_logs: List[str]) -> Tuple[str, Path]:
     latest = find_latest_container(root)
@@ -418,16 +478,23 @@ def resolve_evtx_source(root: Path, scope: str, prefer_logs: List[str]) -> Tuple
         return "file", p
     die(f"No .evtx files found in {latest}")
 
+
 # ─────────────────────── Chainsaw Execution (JSON) ────────────────────────
 def _file_looks_json(path: Path) -> bool:
-    try: text = path.read_text(encoding="utf-8", errors="ignore").lstrip()
-    except Exception: return False
-    if not text: return False
-    if text[0] in "{[": return True
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").lstrip()
+    except Exception:
+        return False
+    if not text:
+        return False
+    if text[0] in "{[":
+        return True
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if not lines: return False
+    if not lines:
+        return False
     starts_ok = sum(1 for ln in lines[:50] if ln and ln[0] in "{[")
     return starts_ok >= max(1, len(lines[:50]) // 2)
+
 
 def _run(cmd: List[str], timeout: int, log_path: Optional[Path]) -> None:
     if log_path:
@@ -437,16 +504,82 @@ def _run(cmd: List[str], timeout: int, log_path: Optional[Path]) -> None:
     else:
         subprocess.run(cmd, check=True, timeout=timeout)
 
-def run_chainsaw_json(src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]) -> Tuple[str, List[str]]:
-    cmd = ["chainsaw","hunt",str(src),"--mapping",str(mapping),"--rule",str(rules_dir),"-s",str(sigma_root),"--json","--output",str(output_json)]
-    _run(cmd, timeout, log_path); return "json", cmd
 
-def run_chainsaw_jsonl(src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]) -> Tuple[str, List[str]]:
-    cmd = ["chainsaw","hunt",str(src),"--mapping",str(mapping),"--rule",str(rules_dir),"-s",str(sigma_root),"--jsonl","--output",str(output_json)]
-    _run(cmd, timeout, log_path); return "jsonl", cmd
+def run_chainsaw_json(
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
+) -> Tuple[str, List[str]]:
+    cmd = [
+        "chainsaw",
+        "hunt",
+        str(src),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules_dir),
+        "-s",
+        str(sigma_root),
+        "--json",
+        "--output",
+        str(output_json),
+    ]
+    _run(cmd, timeout, log_path)
+    return "json", cmd
 
-def run_chainsaw_capture_json_stdout(src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path]) -> Tuple[str, List[str]]:
-    cmd = ["chainsaw","hunt",str(src),"--mapping",str(mapping),"--rule",str(rules_dir),"-s",str(sigma_root),"--json"]
+
+def run_chainsaw_jsonl(
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
+) -> Tuple[str, List[str]]:
+    cmd = [
+        "chainsaw",
+        "hunt",
+        str(src),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules_dir),
+        "-s",
+        str(sigma_root),
+        "--jsonl",
+        "--output",
+        str(output_json),
+    ]
+    _run(cmd, timeout, log_path)
+    return "jsonl", cmd
+
+
+def run_chainsaw_capture_json_stdout(
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
+) -> Tuple[str, List[str]]:
+    cmd = [
+        "chainsaw",
+        "hunt",
+        str(src),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules_dir),
+        "-s",
+        str(sigma_root),
+        "--json",
+    ]
     result = subprocess.run(cmd, check=True, timeout=timeout, capture_output=True, text=True)
     output_json.write_text(result.stdout, encoding="utf-8")
     if log_path:
@@ -454,73 +587,110 @@ def run_chainsaw_capture_json_stdout(src: Path, rules_dir: Path, mapping: Path, 
             lf.write(result.stderr.encode("utf-8", errors="ignore"))
     return "json-stdout", cmd
 
+
 def run_chainsaw_safely(
-    src: Path, rules_dir: Path, mapping: Path, sigma_root: Path, output_json: Path, timeout: int, log_path: Optional[Path], preferred: str = "auto"
+    src: Path,
+    rules_dir: Path,
+    mapping: Path,
+    sigma_root: Path,
+    output_json: Path,
+    timeout: int,
+    log_path: Optional[Path],
+    preferred: str = "auto",
 ) -> Tuple[str, List[str]]:
     info("Running chainsaw hunt...")
     output_json.parent.mkdir(parents=True, exist_ok=True)
     attempts = {
-        "json":   [run_chainsaw_json, run_chainsaw_jsonl, run_chainsaw_capture_json_stdout],
-        "jsonl":  [run_chainsaw_jsonl, run_chainsaw_json, run_chainsaw_capture_json_stdout],
-        "auto":   [run_chainsaw_json, run_chainsaw_jsonl, run_chainsaw_capture_json_stdout],
+        "json": [run_chainsaw_json, run_chainsaw_jsonl, run_chainsaw_capture_json_stdout],
+        "jsonl": [run_chainsaw_jsonl, run_chainsaw_json, run_chainsaw_capture_json_stdout],
+        "auto": [run_chainsaw_json, run_chainsaw_jsonl, run_chainsaw_capture_json_stdout],
     }[preferred]
     last_err: Optional[Exception] = None
     for fn in attempts:
         try:
             label, cmd = fn(src, rules_dir, mapping, sigma_root, output_json, timeout, log_path)
             if _file_looks_json(output_json):
-                ok(f"Chainsaw hunt completed ({label})"); return label, cmd
+                ok(f"Chainsaw hunt completed ({label})")
+                return label, cmd
             else:
                 info(f"Chainsaw produced non-JSON output with mode '{label}'. Trying next...")
         except subprocess.TimeoutExpired:
             die("Chainsaw timed out.")
         except subprocess.CalledProcessError as e:
-            last_err = e; info(f"Chainsaw attempt failed: {e}"); continue
+            last_err = e
+            info(f"Chainsaw attempt failed: {e}")
+            continue
         except Exception as e:
-            last_err = e; info(f"Chainsaw attempt error: {e}"); continue
-    if last_err: die(f"Chainsaw failed after retries: {last_err}")
+            last_err = e
+            info(f"Chainsaw attempt error: {e}")
+            continue
+    if last_err:
+        die(f"Chainsaw failed after retries: {last_err}")
     die("Chainsaw produced non-JSON output; try --chainsaw-format json or jsonl and recheck mapping/rules.")
+
 
 # ─────────────────────────── Detection Loading ────────────────────────────
 def _read_text(path: Path) -> str:
-    if not path.exists(): raise LoaderError(f"detections file not found: {path}")
-    if path.stat().st_size == 0: raise LoaderError(f"detections file is empty: {path}")
-    try: return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError: return path.read_text(encoding="utf-8-sig")
+    if not path.exists():
+        raise LoaderError(f"detections file not found: {path}")
+    if path.stat().st_size == 0:
+        raise LoaderError(f"detections file is empty: {path}")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8-sig")
 
-def _parse_json_text(text: str) -> Any: return json.loads(text)
+
+def _parse_json_text(text: str) -> Any:
+    return json.loads(text)
+
 
 def _parse_jsonl_text(text: str) -> List[Any]:
     out: List[Any] = []
     for ln in (ln.strip() for ln in text.splitlines() if ln.strip()):
-        try: out.append(json.loads(ln))
-        except json.JSONDecodeError: continue
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
     return out
 
+
 def _normalize_to_list(obj: Any) -> List[Dict[str, Any]]:
-    if isinstance(obj, dict) and "detections" in obj and isinstance(obj["detections"], list): return obj["detections"]
-    if isinstance(obj, list): return obj
+    if isinstance(obj, dict) and "detections" in obj and isinstance(obj["detections"], list):
+        return obj["detections"]
+    if isinstance(obj, list):
+        return obj
     raise LoaderError("Unexpected JSON shape. Expect list or dict with 'detections'.")
+
 
 def load_detections_strict(json_path: Path, mode: str, max_items: int) -> List[Dict[str, Any]]:
     text = _read_text(json_path)
-    if not text.strip(): raise LoaderError(f"detections file contains only whitespace: {json_path}")
+    if not text.strip():
+        raise LoaderError(f"detections file contains only whitespace: {json_path}")
     detections: List[Dict[str, Any]] = []
     if mode == "json":
-        try: detections = _normalize_to_list(_parse_json_text(text))
-        except json.JSONDecodeError as e: raise LoaderError(f"JSON parse error: {e}") from e
+        try:
+            detections = _normalize_to_list(_parse_json_text(text))
+        except json.JSONDecodeError as e:
+            raise LoaderError(f"JSON parse error: {e}") from e
     elif mode == "jsonl":
         items = _parse_jsonl_text(text)
-        if not items: raise LoaderError("No valid JSON lines found in JSONL file.")
+        if not items:
+            raise LoaderError("No valid JSON lines found in JSONL file.")
         flat: List[Dict[str, Any]] = []
         for it in items:
-            if isinstance(it, dict) and "detections" in it and isinstance(it["detections"], list): flat.extend(it["detections"])
-            elif isinstance(it, dict): flat.append(it)
-            elif isinstance(it, list): flat.extend(it)
-        if not flat: raise LoaderError("JSONL parsed, but no detections found.")
+            if isinstance(it, dict) and "detections" in it and isinstance(it["detections"], list):
+                flat.extend(it["detections"])
+            elif isinstance(it, dict):
+                flat.append(it)
+            elif isinstance(it, list):
+                flat.extend(it)
+        if not flat:
+            raise LoaderError("JSONL parsed, but no detections found.")
         detections = flat
     else:
-        try: detections = _normalize_to_list(_parse_json_text(text))
+        try:
+            detections = _normalize_to_list(_parse_json_text(text))
         except Exception:
             items = _parse_jsonl_text(text)
             if not items:
@@ -528,18 +698,26 @@ def load_detections_strict(json_path: Path, mode: str, max_items: int) -> List[D
                 raise LoaderError("Failed to parse detections as JSON or JSONL. Preview: " + preview)
             flat: List[Dict[str, Any]] = []
             for it in items:
-                if isinstance(it, dict) and "detections" in it and isinstance(it["detections"], list): flat.extend(it["detections"])
-                elif isinstance(it, dict): flat.append(it)
-                elif isinstance(it, list): flat.extend(it)
+                if isinstance(it, dict) and "detections" in it and isinstance(it["detections"], list):
+                    flat.extend(it["detections"])
+                elif isinstance(it, dict):
+                    flat.append(it)
+                elif isinstance(it, list):
+                    flat.extend(it)
             detections = flat
-    if not isinstance(detections, list): raise LoaderError("Detections is not a list.")
-    if max_items > 0: detections = detections[:max_items]
+    if not isinstance(detections, list):
+        raise LoaderError("Detections is not a list.")
+    if max_items > 0:
+        detections = detections[:max_items]
     ok(f"Loaded {len(detections)} detections")
     return detections
 
+
 # ───────────────────────── Markdown Builders ──────────────────────────────
 def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
-    for i in range(0, len(lst), size): yield lst[i : i + size]
+    for i in range(0, len(lst), size):
+        yield lst[i : i + size]
+
 
 def fmt_detection_md(d: Dict[str, Any]) -> str:
     title = d.get("name", "Untitled")
@@ -569,18 +747,23 @@ def fmt_detection_md(d: Dict[str, Any]) -> str:
         f"{(' - ' + '\\n - '.join(refs)) if refs else 'None listed.'}\n\n---\n"
     )
 
+
 def build_raw_md(detections: List[Dict[str, Any]], chunk_size: int) -> str:
     head = "# 🔍 Chainsaw Detection Summary\n\nThis report contains Sigma rule detections from Chainsaw on parsed Windows event logs.\n\n"
     body = []
     for block in chunk(detections, chunk_size):
-        for det in block: body.append(fmt_detection_md(det))
+        for det in block:
+            body.append(fmt_detection_md(det))
     return head + "".join(body)
 
+
 def _format_script(script: str, no_script: bool, truncate_script: int) -> str:
-    if no_script: return "(omitted)"
+    if no_script:
+        return "(omitted)"
     if truncate_script > 0 and script:
         return script[:truncate_script] + ("… [truncated]" if len(script) > truncate_script else "")
     return script or ""
+
 
 def build_chunk_prompt(chunk_items: List[Dict[str, Any]], *, no_script: bool, truncate_script: int) -> str:
     header = (
@@ -591,9 +774,9 @@ def build_chunk_prompt(chunk_items: List[Dict[str, Any]], *, no_script: bool, tr
     for i, det in enumerate(chunk_items, 1):
         ts = det.get("timestamp", "N/A")
         rule = det.get("name", "N/A")
-        doc = (((det.get("document") or {}).get("data") or {}).get("Event") or {})
-        event_id = ((doc.get("System") or {}).get("EventID") or "N/A")
-        script_raw = ((doc.get("EventData") or {}).get("ScriptBlockText") or "")
+        doc = ((det.get("document") or {}).get("data") or {}).get("Event") or {}
+        event_id = (doc.get("System") or {}).get("EventID") or "N/A"
+        script_raw = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
         script = _format_script(script_raw, no_script=no_script, truncate_script=truncate_script)
         mitre_tags = ", ".join(det.get("tags", []) or []) or "None"
         category = (det.get("logsource") or {}).get("category", "N/A")
@@ -607,25 +790,41 @@ def build_chunk_prompt(chunk_items: List[Dict[str, Any]], *, no_script: bool, tr
         )
     return header + "\n".join(parts)
 
+
 # ───────────────────────────── Token Utils ────────────────────────────────
 def get_encoder() -> tiktoken.Encoding:
-    try: return tiktoken.get_encoding("cl100k_base")
-    except Exception: return tiktoken.get_encoding("cl100k_base")
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return tiktoken.get_encoding("cl100k_base")
+
 
 def estimate_tokens(encoder: tiktoken.Encoding, text: str) -> int:
-    try: return len(encoder.encode(text))
-    except Exception: return math.ceil(len(text) / 4)
+    try:
+        return len(encoder.encode(text))
+    except Exception:
+        return math.ceil(len(text) / 4)
+
 
 def guardrail_estimate_or_die(
-    chunks: List[List[Dict[str, Any]]], system_prompt: str, max_chunks: int, max_input_tokens: int, *, no_script: bool, truncate_script: int,
+    chunks: List[List[Dict[str, Any]]],
+    system_prompt: str,
+    max_chunks: int,
+    max_input_tokens: int,
+    *,
+    no_script: bool,
+    truncate_script: int,
 ) -> Tuple[int, List[int]]:
     if len(chunks) > max_chunks:
         die(f"Chunk guardrail exceeded: {len(chunks)} chunks > --max-chunks {max_chunks}.")
-    enc = get_encoder(); per_chunk_inputs: List[int] = []; total = 0
+    enc = get_encoder()
+    per_chunk_inputs: List[int] = []
+    total = 0
     for ch in chunks:
         prompt = build_chunk_prompt(ch, no_script=no_script, truncate_script=truncate_script)
         t = estimate_tokens(enc, system_prompt) + estimate_tokens(enc, prompt)
-        per_chunk_inputs.append(t); total += t
+        per_chunk_inputs.append(t)
+        total += t
     if total > max_input_tokens:
         die(
             f"Estimated input tokens {total} exceed --max-input-tokens {max_input_tokens}.\n"
@@ -633,9 +832,12 @@ def guardrail_estimate_or_die(
         )
     return total, per_chunk_inputs
 
+
 # ───────────────────────────── LLM Calls ──────────────────────────────────
 def _sleep_backoff(i: int, base: float = 1.25, cap: float = 30.0):
-    delay = min(cap, base ** i) + random.uniform(0, 0.2); time.sleep(delay)
+    delay = min(cap, base**i) + random.uniform(0, 0.2)
+    time.sleep(delay)
+
 
 def call_llm(
     client: OpenAI,
@@ -671,7 +873,8 @@ def call_llm(
                 out = []
                 for ev in chunks:
                     delta = getattr(ev.choices[0].delta, "content", None)
-                    if delta: out.append(delta)
+                    if delta:
+                        out.append(delta)
                 return "".join(out)
             else:
                 resp = client.chat.completions.create(**payload)
@@ -679,19 +882,25 @@ def call_llm(
         except KeyboardInterrupt:
             raise
         except (RateLimitError, APITimeoutError, APIConnectionError) as e:
-            last_err = e; _sleep_backoff(attempt); continue
+            last_err = e
+            _sleep_backoff(attempt)
+            continue
         except APIError as e:
             last_err = e
             status = getattr(e, "status_code", None)
             if status and 500 <= status < 600:
-                _sleep_backoff(attempt); continue
+                _sleep_backoff(attempt)
+                continue
             raise
         except BadRequestError as e:
-            msg = str(e); stripped = False
+            msg = str(e)
+            stripped = False
             if ("temperature" in msg) and ("unsupported" in msg or "does not support" in msg):
-                force_no_temperature = True; stripped = True
+                force_no_temperature = True
+                stripped = True
             if ("seed" in msg) and ("unsupported" in msg or "does not support" in msg or "unknown parameter" in msg):
-                seed = None; stripped = True
+                seed = None
+                stripped = True
             if stripped:
                 try:
                     payload = {
@@ -712,7 +921,8 @@ def call_llm(
                         out = []
                         for ev in chunks:
                             delta = getattr(ev.choices[0].delta, "content", None)
-                            if delta: out.append(delta)
+                            if delta:
+                                out.append(delta)
                         return "".join(out)
                     else:
                         resp = client.chat.completions.create(**payload)
@@ -721,13 +931,16 @@ def call_llm(
                     raise
                 except Exception as e2:
                     last_err = e2
-                    _sleep_backoff(attempt); continue
+                    _sleep_backoff(attempt)
+                    continue
             raise
     raise RuntimeError(f"LLM retries exceeded after {max_retries} attempts: {last_err}")
+
 
 # ─────────────────────────── Rate Limiter ────────────────────────────────
 class RateLimiter:
     """Simple cross-thread RPM limiter."""
+
     def __init__(self, rpm: int):
         self.rpm = max(0, rpm)
         self.lock = threading.Lock()
@@ -743,6 +956,7 @@ class RateLimiter:
                 time.sleep(self.next_time - now)
             self.next_time = max(now, self.next_time) + self.interval
 
+
 # ───────────────────────────── Two-Pass Flow ──────────────────────────────
 def build_micro_prompt(chunk_items: List[Dict[str, Any]], *, include_script: bool, micro_truncate: int) -> str:
     header = (
@@ -756,16 +970,18 @@ def build_micro_prompt(chunk_items: List[Dict[str, Any]], *, include_script: boo
         ts = det.get("timestamp", "N/A")
         rule = det.get("name", "N/A")
         tags = ", ".join(det.get("tags", []) or []) or "None"
-        doc = (((det.get("document") or {}).get("data") or {}).get("Event") or {})
-        eid = ((doc.get("System") or {}).get("EventID") or "N/A")
-        script_raw = ((doc.get("EventData") or {}).get("ScriptBlockText") or "")
+        doc = ((det.get("document") or {}).get("data") or {}).get("Event") or {}
+        eid = (doc.get("System") or {}).get("EventID") or "N/A"
+        script_raw = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
         snippet = ""
         if include_script and micro_truncate > 0 and script_raw:
             snippet = script_raw[:micro_truncate] + ("… [truncated]" if len(script_raw) > micro_truncate else "")
         line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
-        if snippet: line += f"  | snippet: {snippet}"
+        if snippet:
+            line += f"  | snippet: {snippet}"
         parts.append(line)
     return header + "\n" + "\n".join(parts)
+
 
 def build_final_merge_prompt(micro_sections: List[str]) -> str:
     header = (
@@ -774,6 +990,7 @@ def build_final_merge_prompt(micro_sections: List[str]) -> str:
         "1) Executive Summary\n2) Observed Activity (grouped)\n3) Key TTPs/Techniques\n4) Risk Assessment\n5) Actionable Recommendations (High/Med/Low)\n"
     )
     return header + "\n\n" + "\n\n---\n\n".join(micro_sections)
+
 
 def two_pass_summarize(
     client: OpenAI,
@@ -795,10 +1012,10 @@ def two_pass_summarize(
     rpm: int = 0,
     micro_max_seconds: int = 0,
     global_deadline_ts: float = 0.0,
-) -> Tuple[str, int, int, Dict[str, Tuple[int,int]]]:
+) -> Tuple[str, int, int, Dict[str, Tuple[int, int]]]:
     enc = get_encoder()
     total_in = total_out = 0
-    usage: Dict[str, Tuple[int,int]] = {}
+    usage: Dict[str, Tuple[int, int]] = {}
     limiter = RateLimiter(rpm)
 
     def check_deadline():
@@ -818,8 +1035,16 @@ def two_pass_summarize(
         def _invoke() -> str:
             limiter.wait()
             return call_llm(
-                client, chunk_model, DEFAULT_SYSTEM_PROMPT, prompt, temperature, max_retries, timeout_s,
-                force_no_temperature=force_no_temperature, seed=seed, stream=False
+                client,
+                chunk_model,
+                DEFAULT_SYSTEM_PROMPT,
+                prompt,
+                temperature,
+                max_retries,
+                timeout_s,
+                force_no_temperature=force_no_temperature,
+                seed=seed,
+                stream=False,
             )
 
         if micro_max_seconds > 0:
@@ -828,9 +1053,11 @@ def two_pass_summarize(
                 try:
                     content = fut.result(timeout=micro_max_seconds)
                 except Exception:
-                    try: fut.cancel()
-                    except Exception: pass
-                    content = f"**[Skipped]** micro chunk {idx+1}: exceeded {micro_max_seconds}s"
+                    try:
+                        fut.cancel()
+                    except Exception:
+                        pass
+                    content = f"**[Skipped]** micro chunk {idx + 1}: exceeded {micro_max_seconds}s"
         else:
             content = _invoke()
 
@@ -840,19 +1067,25 @@ def two_pass_summarize(
     if micro_workers > 1:
         if stream:
             info("Streaming disabled for micro-pass due to --micro-workers > 1.")
-        from os import cpu_count
+
         max_workers = min(micro_workers, len(chunks))
-        with Progress(SpinnerColumn(), TextColumn("[bold]Micro[/bold]"), BarColumn(),
-                      TextColumn("chunk [progress.completed]/[progress.total]"),
-                      TimeElapsedColumn(), transient=True) as prog:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Micro[/bold]"),
+            BarColumn(),
+            TextColumn("chunk [progress.completed]/[progress.total]"),
+            TimeElapsedColumn(),
+            transient=True,
+        ) as prog:
             task = prog.add_task("micro", total=len(chunks))
             with ThreadPoolExecutor(max_workers=max_workers) as ex:
                 futures = {ex.submit(_work, i, ch): i for i, ch in enumerate(chunks)}
                 try:
                     for fut in as_completed(futures):
                         i, content, _in, _out = fut.result()
-                        micro_sections[i] = f"## Micro {i+1}\n{content}"
-                        micro_in += _in; micro_out += _out
+                        micro_sections[i] = f"## Micro {i + 1}\n{content}"
+                        micro_in += _in
+                        micro_out += _out
                         prog.update(task, advance=1)
                         check_deadline()
                 except KeyboardInterrupt:
@@ -860,26 +1093,40 @@ def two_pass_summarize(
                         f.cancel()
                     raise
     else:
-        with Progress(SpinnerColumn(), TextColumn("[bold]Micro[/bold]"), BarColumn(),
-                      TextColumn("chunk [progress.completed]/[progress.total]"),
-                      TimeElapsedColumn(), transient=True) as prog:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Micro[/bold]"),
+            BarColumn(),
+            TextColumn("chunk [progress.completed]/[progress.total]"),
+            TimeElapsedColumn(),
+            transient=True,
+        ) as prog:
             task = prog.add_task("micro", total=len(chunks))
             for i, ch in enumerate(chunks):
                 check_deadline()
                 prompt = build_micro_prompt(ch, include_script=micro_include_script, micro_truncate=micro_truncate)
                 micro_in += estimate_tokens(enc, DEFAULT_SYSTEM_PROMPT) + estimate_tokens(enc, prompt)
-                info(f"Calling LLM (micro chunk {i+1}/{len(chunks)}; model={chunk_model})")
+                info(f"Calling LLM (micro chunk {i + 1}/{len(chunks)}; model={chunk_model})")
                 limiter.wait()
                 content = call_llm(
-                    client, chunk_model, DEFAULT_SYSTEM_PROMPT, prompt, temperature, max_retries, timeout_s,
-                    force_no_temperature=force_no_temperature, seed=seed, stream=stream
+                    client,
+                    chunk_model,
+                    DEFAULT_SYSTEM_PROMPT,
+                    prompt,
+                    temperature,
+                    max_retries,
+                    timeout_s,
+                    force_no_temperature=force_no_temperature,
+                    seed=seed,
+                    stream=stream,
                 )
                 micro_out += estimate_tokens(enc, content)
-                micro_sections[i] = f"## Micro {i+1}\n{content}"
+                micro_sections[i] = f"## Micro {i + 1}\n{content}"
                 prog.update(task, advance=1)
 
     usage[chunk_model] = (micro_in, micro_out)
-    total_in += micro_in; total_out += micro_out
+    total_in += micro_in
+    total_out += micro_out
 
     # Pass 2: final merge
     check_deadline()
@@ -892,7 +1139,8 @@ def two_pass_summarize(
         running = estimate_tokens(enc, DEFAULT_FINAL_SYSTEM)
         for tok, s in pairs:
             if running + tok <= final_max_input_tokens:
-                keep.append(s); running += tok
+                keep.append(s)
+                running += tok
             else:
                 break
         if not keep:
@@ -903,14 +1151,22 @@ def two_pass_summarize(
     info("Two-pass: merging micro-summaries...")
     limiter.wait()
     final_content = call_llm(
-        client, final_model, DEFAULT_FINAL_SYSTEM, final_user, temperature, max_retries, timeout_s,
-        force_no_temperature=force_no_temperature, seed=seed, stream=stream
+        client,
+        final_model,
+        DEFAULT_FINAL_SYSTEM,
+        final_user,
+        temperature,
+        max_retries,
+        timeout_s,
+        force_no_temperature=force_no_temperature,
+        seed=seed,
+        stream=stream,
     )
     final_in = estimate_tokens(enc, DEFAULT_FINAL_SYSTEM) + estimate_tokens(enc, final_user)
     final_out = estimate_tokens(enc, final_content)
-    usage[final_model] = (usage.get(final_model, (0,0))[0] + final_in,
-                          usage.get(final_model, (0,0))[1] + final_out)
-    total_in += final_in; total_out += final_out
+    usage[final_model] = (usage.get(final_model, (0, 0))[0] + final_in, usage.get(final_model, (0, 0))[1] + final_out)
+    total_in += final_in
+    total_out += final_out
 
     head = (
         "# 🔍 Chainsaw Detection Summary (LLM, Two-Pass)\n\n"
@@ -921,29 +1177,42 @@ def two_pass_summarize(
         f"- Mode: two-pass (micro → final)\n\n---\n"
     )
     appendix = "\n\n---\n\n## Appendix: Micro-Summaries\n\n" + "\n\n".join([s or "" for s in micro_sections])
-    return head + environment_md + "## Final Executive Report\n\n" + final_content + appendix, total_in, total_out, usage
+    return (
+        head + environment_md + "## Final Executive Report\n\n" + final_content + appendix,
+        total_in,
+        total_out,
+        usage,
+    )
+
 
 # ─────────────────────────── Cost Estimation ──────────────────────────────
-def estimate_cost_by_model_with(pricing: Dict[str, Dict[str, float]], usages: Dict[str, Tuple[int,int]]) -> Tuple[float, List[str]]:
-    total = 0.0; lines = []
+def estimate_cost_by_model_with(
+    pricing: Dict[str, Dict[str, float]], usages: Dict[str, Tuple[int, int]]
+) -> Tuple[float, List[str]]:
+    total = 0.0
+    lines = []
     for m, (tin, tout) in usages.items():
         p = pricing.get(m, {"in": 0.0, "out": 0.0})
-        cost = (tin/1000.0)*p["in"] + (tout/1000.0)*p["out"]
+        cost = (tin / 1000.0) * p["in"] + (tout / 1000.0) * p["out"]
         total += cost
         lines.append(f"- {m}: in={tin} out={tout} → ${cost:.6f} (in {p['in']}/k, out {p['out']}/k)")
     return round(total, 6), lines
 
-def estimate_cost_by_model(usages: Dict[str, Tuple[int,int]]) -> Tuple[float, List[str]]:
+
+def estimate_cost_by_model(usages: Dict[str, Tuple[int, int]]) -> Tuple[float, List[str]]:
     return estimate_cost_by_model_with(PRICING, usages)
 
-def write_usage_json(base_dir: Path, usage: Dict[str, Tuple[int,int]]) -> Path:
+
+def write_usage_json(base_dir: Path, usage: Dict[str, Tuple[int, int]]) -> Path:
     out = base_dir / "usage_by_model.json"
     shaped = {m: {"in": tin, "out": tout} for m, (tin, tout) in usage.items()}
-    out.write_text(json.dumps(shaped, indent=2), encoding="utf-8"); return out
+    out.write_text(json.dumps(shaped, indent=2), encoding="utf-8")
+    return out
 
-def load_usage_json(path: Path) -> Dict[str, Tuple[int,int]]:
+
+def load_usage_json(path: Path) -> Dict[str, Tuple[int, int]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    usage: Dict[str, Tuple[int,int]] = {}
+    usage: Dict[str, Tuple[int, int]] = {}
     for m, v in data.items():
         if isinstance(v, dict) and "in" in v and "out" in v:
             usage[m] = (int(v["in"]), int(v["out"]))
@@ -953,19 +1222,30 @@ def load_usage_json(path: Path) -> Dict[str, Tuple[int,int]]:
             raise RuntimeError(f"Bad usage entry for {m}: {v}")
     return usage
 
+
 # ───────────────────────────── Output Helpers ─────────────────────────────
 def ensure_css(base_dir: Path, css_path: Optional[Path]) -> Path:
-    if css_path and css_path.exists(): return css_path
+    if css_path and css_path.exists():
+        return css_path
     out = base_dir / "report.css"
-    if not out.exists(): out.write_text(DEFAULT_CSS, encoding="utf-8")
+    if not out.exists():
+        out.write_text(DEFAULT_CSS, encoding="utf-8")
     return out
 
+
 def sanitize_md_for_pandoc(text: str) -> str:
-    if text.startswith("---\n"): text = "\n" + text
+    if text.startswith("---\n"):
+        text = "\n" + text
     return re.sub(r"(?m)^\s*---\s*$", "<hr />", text)
 
+
 def write_outputs(
-    base_dir: Path, raw_md: str, llm_md: str, make_pdf: bool, make_html: bool, css_path: Optional[Path],
+    base_dir: Path,
+    raw_md: str,
+    llm_md: str,
+    make_pdf: bool,
+    make_html: bool,
+    css_path: Optional[Path],
 ) -> Tuple[Path, Path, Optional[Path], Optional[Path]]:
     base_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.today().strftime("%Y-%m-%d")
@@ -982,24 +1262,40 @@ def write_outputs(
         try:
             pdf_path = base_dir / f"chainsaw_summary_{today}.pdf"
             pypandoc.convert_text(
-                llm_md_safe, to="pdf", format="gfm", outputfile=str(pdf_path),
-                extra_args=["--standalone","--pdf-engine=xelatex","--metadata","title=DFIR Chainsaw Summary (LLM)"],
+                llm_md_safe,
+                to="pdf",
+                format="gfm",
+                outputfile=str(pdf_path),
+                extra_args=["--standalone", "--pdf-engine=xelatex", "--metadata", "title=DFIR Chainsaw Summary (LLM)"],
             )
         except OSError as e:
-            info(f"PDF generation skipped: {e}"); pdf_path = None
+            info(f"PDF generation skipped: {e}")
+            pdf_path = None
 
     if make_html:
         try:
             css_out = ensure_css(base_dir, css_path)
             html_path = base_dir / f"chainsaw_summary_{today}.html"
             pypandoc.convert_text(
-                llm_md_safe, to="html", format="gfm", outputfile=str(html_path),
-                extra_args=["--standalone","--toc","--toc-depth=3",f"--css={css_out}","--metadata","title=DFIR Chainsaw Summary (LLM)"],
+                llm_md_safe,
+                to="html",
+                format="gfm",
+                outputfile=str(html_path),
+                extra_args=[
+                    "--standalone",
+                    "--toc",
+                    "--toc-depth=3",
+                    f"--css={css_out}",
+                    "--metadata",
+                    "title=DFIR Chainsaw Summary (LLM)",
+                ],
             )
         except OSError as e:
-            info(f"HTML generation skipped: {e}"); html_path = None
+            info(f"HTML generation skipped: {e}")
+            html_path = None
 
     return raw_md_path, llm_md_path, pdf_path, html_path
+
 
 def write_run_meta(
     base_dir: Path,
@@ -1013,7 +1309,7 @@ def write_run_meta(
     evtx_path: Path,
     cfg: AppConfig,
     sysmon: Optional[Dict[str, Any]],
-    usage_by_model: Dict[str, Tuple[int,int]],
+    usage_by_model: Dict[str, Tuple[int, int]],
 ) -> Path:
     meta = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -1048,11 +1344,13 @@ def write_run_meta(
     out.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return out
 
+
 # ───────────────────────────────── Main ───────────────────────────────────
 def main() -> None:
     load_dotenv()
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: die("OPENAI_API_KEY not set")
+    if not api_key:
+        die("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
 
     cfg = parse_args()
@@ -1068,7 +1366,8 @@ def main() -> None:
         usage = load_usage_json(cfg.cost_only)
         est_cost, lines = estimate_cost_by_model_with(pricing, usage)
         console.rule("[bold green]Cost (from usage file)[/bold green]")
-        for ln in lines: console.print(f"[cyan]{ln}[/cyan]")
+        for ln in lines:
+            console.print(f"[cyan]{ln}[/cyan]")
         console.print(f"[cyan]💸 Estimated total cost:[/cyan] ${est_cost}")
         return
 
@@ -1101,8 +1400,14 @@ def main() -> None:
     if cfg.hunt:
         ensure_chainsaw_available()
         chainsaw_label, chainsaw_cmd = run_chainsaw_safely(
-            src_path, rules_dir_resolved, mapping_resolved, sigma_root_resolved,
-            detections_json, cfg.timeout, cfg.log_chainsaw, preferred=cfg.chainsaw_format,
+            src_path,
+            rules_dir_resolved,
+            mapping_resolved,
+            sigma_root_resolved,
+            detections_json,
+            cfg.timeout,
+            cfg.log_chainsaw,
+            preferred=cfg.chainsaw_format,
         )
     else:
         info(f"Skipping chainsaw hunt (using existing {detections_json})")
@@ -1115,8 +1420,14 @@ def main() -> None:
         info("Attempting to regenerate detections via Chainsaw once (JSON)...")
         ensure_chainsaw_available()
         chainsaw_label, chainsaw_cmd = run_chainsaw_safely(
-            src_path, rules_dir_resolved, mapping_resolved, sigma_root_resolved,
-            detections_json, cfg.timeout, cfg.log_chainsaw, preferred="json",
+            src_path,
+            rules_dir_resolved,
+            mapping_resolved,
+            sigma_root_resolved,
+            detections_json,
+            cfg.timeout,
+            cfg.log_chainsaw,
+            preferred="json",
         )
         detections = load_detections_strict(detections_json, cfg.parse_format, cfg.max_detections)
 
@@ -1140,28 +1451,48 @@ def main() -> None:
     try:
         if cfg.two_pass:
             llm_md, in_tokens, out_tokens, usage_by_model = two_pass_summarize(
-                client, chunks, cfg.micro_truncate, cfg.micro_include_script, cfg.final_max_input_tokens,
-                chunk_model=cfg.chunk_model, final_model=cfg.final_model,
-                temperature=cfg.llm_temperature, max_retries=cfg.llm_max_retries, timeout_s=cfg.llm_timeout,
+                client,
+                chunks,
+                cfg.micro_truncate,
+                cfg.micro_include_script,
+                cfg.final_max_input_tokens,
+                chunk_model=cfg.chunk_model,
+                final_model=cfg.final_model,
+                temperature=cfg.llm_temperature,
+                max_retries=cfg.llm_max_retries,
+                timeout_s=cfg.llm_timeout,
                 environment_md=environment_md,
-                force_no_temperature=cfg.force_no_temperature, seed=cfg.llm_seed,
-                stream=cfg.stream, micro_workers=cfg.micro_workers,
-                rpm=cfg.rpm, micro_max_seconds=cfg.micro_max_seconds,
+                force_no_temperature=cfg.force_no_temperature,
+                seed=cfg.llm_seed,
+                stream=cfg.stream,
+                micro_workers=cfg.micro_workers,
+                rpm=cfg.rpm,
+                micro_max_seconds=cfg.micro_max_seconds,
                 global_deadline_ts=global_deadline_ts,
             )
         else:
             _total_in_est, _per_chunk = guardrail_estimate_or_die(
-                chunks, cfg.system_prompt, cfg.max_chunks, cfg.max_input_tokens,
-                no_script=cfg.no_script, truncate_script=cfg.truncate_script,
+                chunks,
+                cfg.system_prompt,
+                cfg.max_chunks,
+                cfg.max_input_tokens,
+                no_script=cfg.no_script,
+                truncate_script=cfg.truncate_script,
             )
             # For single-pass, reuse chunked path; no extra perf knobs here
             llm_md, in_tokens, out_tokens, usage_by_model = call_llm_chunked(
-                client, chunks, cfg.system_prompt,
-                no_script=cfg.no_script, truncate_script=cfg.truncate_script,
-                model=cfg.chunk_model, temperature=cfg.llm_temperature,
-                max_retries=cfg.llm_max_retries, timeout_s=cfg.llm_timeout,
+                client,
+                chunks,
+                cfg.system_prompt,
+                no_script=cfg.no_script,
+                truncate_script=cfg.truncate_script,
+                model=cfg.chunk_model,
+                temperature=cfg.llm_temperature,
+                max_retries=cfg.llm_max_retries,
+                timeout_s=cfg.llm_timeout,
                 environment_md=environment_md,
-                force_no_temperature=cfg.force_no_temperature, seed=cfg.llm_seed,
+                force_no_temperature=cfg.force_no_temperature,
+                seed=cfg.llm_seed,
                 stream=cfg.stream,
             )
     except KeyboardInterrupt:
@@ -1202,16 +1533,21 @@ def main() -> None:
     console.print(f"\n[green]✓ LLM Markdown:[/green] {llm_md_path}")
     console.print(f"[green]✓ Raw Markdown:[/green] {raw_md_path}")
     if cfg.make_pdf:
-        if pdf_path: console.print(f"[green]✓ PDF:[/green] {pdf_path}")
-        else: console.print(f"[yellow]• PDF generation failed (install XeLaTeX or set PDF engine).[/yellow]")
+        if pdf_path:
+            console.print(f"[green]✓ PDF:[/green] {pdf_path}")
+        else:
+            console.print("[yellow]• PDF generation failed (install XeLaTeX or set PDF engine).[/yellow]")
     if html_path:
         console.print(f"[green]✓ HTML:[/green] {html_path}")
-        if not cfg.css_path: console.print(f"[green]✓ CSS:[/green] {dated / 'report.css'}")
+        if not cfg.css_path:
+            console.print(f"[green]✓ CSS:[/green] {dated / 'report.css'}")
     console.print(f"[cyan]🧠 Tokens used (est):[/cyan] {total_tokens}")
-    for ln in lines: console.print(f"[cyan]{ln}[/cyan]")
+    for ln in lines:
+        console.print(f"[cyan]{ln}[/cyan]")
     console.print(f"[cyan]💸 Estimated total cost:[/cyan] ${est_cost}")
     console.print(f"[green]✓ Usage JSON:[/green] {usage_path}")
     console.print(f"[green]✓ Run Metadata:[/green] {run_meta_path}")
+
 
 if __name__ == "__main__":
     main()
