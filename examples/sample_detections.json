@@ -1,0 +1,5 @@
+{
+  "detections": [
+    {"ruleTitle": "Suspicious EncodedCommand", "timestamp": "2025-10-15T12:00:00Z", "host":"WINLAB01","evidence":"4104 + 4688 w/ -EncodedCommand"}
+  ]
+}
