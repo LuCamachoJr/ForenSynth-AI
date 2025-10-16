@@ -31,20 +31,20 @@ def summarize_detection(detection):
 
     markdown = f"""
     ### 🛡️ {title}
-    **Severity:** {severity}  
-    **Timestamp:** `{timestamp}`  
-    **Rule ID:** `{rule_id}`  
-    **Product:** `{product}`  
-    **Category:** `{category}`  
-    **Authors:** {", ".join(authors) if authors else "Unknown"}  
+    **Severity:** {severity}
+    **Timestamp:** `{timestamp}`
+    **Rule ID:** `{rule_id}`
+    **Product:** `{product}`
+    **Category:** `{category}`
+    **Authors:** {", ".join(authors) if authors else "Unknown"}
 
-    **Tactics/Techniques:**  
+    **Tactics/Techniques:**
     {" • ".join(tags) if tags else "None"}
 
-    **False Positives:**  
+    **False Positives:**
     {" - " + "\n - ".join(falsepositives) if falsepositives else "None listed."}
 
-    **References:**  
+    **References:**
     {" - " + "\n - ".join(references) if references else "None listed."}
 
     ---

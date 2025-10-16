@@ -638,7 +638,7 @@ def main():
     console.rule(f"[bold]⚙ Detections found ({len(detections)}) — summarizing…[/bold]")
 
     # 4) Summarize (two-pass or single-pass)
-    enc = get_encoder()
+    get_encoder()
     in_tokens = out_tokens = 0
     if cfg.two_pass:
         md, in_tokens, out_tokens = two_pass_summarize(client, detections, cfg)

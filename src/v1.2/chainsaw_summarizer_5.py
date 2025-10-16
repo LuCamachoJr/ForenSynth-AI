@@ -247,7 +247,6 @@ def parse_args() -> AppConfig:
     # Resolve micro_workers
     if str(a.micro_workers).lower() == "auto":
         try:
-
             cpu = max(1, os.cpu_count() or 1)  # type: ignore
         except Exception:
             cpu = 2

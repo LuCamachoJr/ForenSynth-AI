@@ -416,7 +416,8 @@ def build_heatmap(dets: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"labels": [], "values": [], "w": 24, "h": 1, "max": 0}
     # map day index + hour
     base_day = min(t.date() for t in times)
-    idx = lambda t: (t.date() - base_day).days
+    def idx(t):
+        return (t.date() - base_day).days
     buckets = {}
     maxv = 0
     for t in times:

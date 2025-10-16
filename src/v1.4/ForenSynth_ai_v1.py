@@ -422,7 +422,7 @@ def safe_temperature(model: str, t: float) -> Optional[float]:
 def call_llm(
     client: OpenAI, model: str, system: str, user: str, timeout_s: int, retries: int, temperature: float
 ) -> str:
-    st = time.time()
+    time.time()
     last_err: Optional[Exception] = None
     for i in range(retries):
         try:

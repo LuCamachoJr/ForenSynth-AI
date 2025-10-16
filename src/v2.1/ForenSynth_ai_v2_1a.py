@@ -369,7 +369,7 @@ def two_pass(client: OpenAI, detections: List[Dict[str, Any]], cfg: Config) -> T
             content = call_llm(
                 client, cfg.chunk_model, SYSTEM, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
             )
-            dt = time.time() - t0
+            time.time() - t0
             usages[cfg.chunk_model] = (
                 usages[cfg.chunk_model][0] + len(user) // 4 + len(SYSTEM) // 4,
                 usages[cfg.chunk_model][1] + len(content) // 4,
@@ -382,7 +382,7 @@ def two_pass(client: OpenAI, detections: List[Dict[str, Any]], cfg: Config) -> T
     final_user = "Merge the following micro-summaries into a single executive DFIR report:\n\n" + "\n\n---\n\n".join(
         micro_sections
     )
-    start = time.time()
+    time.time()
     with Progress(
         SpinnerColumn(), TextColumn("[bold]🧠 Final summary in progress…[/bold]"), TimeElapsedColumn(), transient=False
     ) as prog:
