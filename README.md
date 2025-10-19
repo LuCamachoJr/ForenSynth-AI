@@ -176,7 +176,7 @@ Set your API key:
     export OPENAI_API_KEY="sk-..."
 
 ### Suggested code guard (inside your CLI init)
-Pseudocode: fail gracefully if OpenAI is enabled but package/env is missing.
+Fail gracefully if OpenAI is enabled but package/env is missing.
     import os
     try:
         import openai  # only when provider == "openai"
@@ -186,7 +186,6 @@ Pseudocode: fail gracefully if OpenAI is enabled but package/env is missing.
         raise SystemExit("OPENAI_API_KEY is not set.")
 
 ---
-
     
 
 
