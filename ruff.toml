@@ -1,9 +1,12 @@
 line-length = 100
 target-version = 'py311'
 
-# Exclude historical v1.x lineage (kept for history, not for lint)
 exclude = [
-  'src/v1.*'
+  'src/v1.0',
+  'src/v1.1',
+  'src/v1.2',
+  'src/v1.3',
+  'src/v1.4'
 ]
 
 [lint]
