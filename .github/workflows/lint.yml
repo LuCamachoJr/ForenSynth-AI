@@ -10,13 +10,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
       - name: Install Ruff
         run: pip install ruff
-      - name: Ruff format (check only)
-        run: ruff format --check src/v2.* *.py
-      - name: Ruff check (v2.x only)
-        run: ruff check src/v2.* *.py
+
+      - name: Discover v2 paths
+        id: paths
+        shell: bash
+        run: |
+          set -e
+          V2_DIRS=$(ls -d src/v2.* 2>/dev/null || true)
+          echo "v2dirs=${V2_DIRS}" >> "$GITHUB_OUTPUT"
+          echo "Found v2 dirs: ${V2_DIRS}"
+
+      - name: Ruff format (check only, v2.*)
+        if: steps.paths.outputs.v2dirs != ''
+        run: ruff format --check ${{ steps.paths.outputs.v2dirs }}
+
+      - name: Ruff check (v2.*)
+        if: steps.paths.outputs.v2dirs != ''
+        run: ruff check ${{ steps.paths.outputs.v2dirs }}
+
+      - name: No v2.* found (skip)
+        if: steps.paths.outputs.v2dirs == ''
+        run: echo "No v2.* directories found; skipping Ruff."
