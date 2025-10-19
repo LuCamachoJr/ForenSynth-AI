@@ -80,7 +80,16 @@ Evidence-forward DFIR reporting engine. This repo reconstructs history from earl
 - `--dry-run` — Parse inputs and print planned actions, then exit.
 - `-h, --help` — Show help and exit.
 
-# Example
+## Examples
+
+### Minimal example (quick run)
+    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py `
+      --input "E:\Cases\case01\detections\detections.json" `
+      --outdir "E:\Cases\case01\report" `
+      --html --integrity
+
+### Advanced example (keep your existing one)
+    # Example
     python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py `
       --input "E:\Cases\case01\detections\detections.json" `
       --outdir "E:\Cases\case01\report" `
@@ -88,7 +97,14 @@ Evidence-forward DFIR reporting engine. This repo reconstructs history from earl
       --model gpt-5-large --max-batch 200 --temperature 0.2 --seed 42 `
       --title "Case 01 — ForenSynth Visual Report" --case-id CASE-2025-10-16
 
+### What you should see
+- report.html  → Visual report (KPI cards, heatmap, narrative)
+- report.md    → Markdown narrative with sections
+- evidence_snapshot.json / .csv → Hosts, users, rules, IOCs
+- meta.txt     → Model, timestamp, SHA256
+
 ---
+ 
 
 
 
