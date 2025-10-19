@@ -1,68 +1,68 @@
-\# Changelog
+# Changelog
 
 
 
-\## v2.3.3
+## v2.3.3
 
-\- Visual report (heatmap, KPI cards, IOC appendix, SHA256 footer)
-
-
-
-\## v2.3.2
-
-\- Deterministic two-pass; Evidence Snapshot; CSV run log
+- Visual report (heatmap, KPI cards, IOC appendix, SHA256 footer)
 
 
 
-\## v2.3.1
+## v2.3.2
 
-\- Pre–max-fidelity polish and UX tweaks
-
-
-
-\## v2.1.0
-
-\- Resilience/retry stream; improved batching
+- Deterministic two-pass; Evidence Snapshot; CSV run log
 
 
 
-\## v2.0.0
+## v2.3.1
 
-\- Two-pass pipeline (micro summaries → final)
-
-
-
-\## v1.4.0
-
-\- Rebrand to ForenSynth AI (single-pass)
+- Pre–max-fidelity polish and UX tweaks
 
 
 
-\## v1.3.1
+## v2.1.0
 
-\- Fast profile v1: stability tweaks
-
-
-
-\## v1.3.0
-
-\- GPT-5 fast profile for throughput tests
+- Resilience/retry stream; improved batching
 
 
 
-\## v1.2.0
+## v2.0.0
 
-\- First GPT-5 integration
-
-
-
-\## v1.1.0
-
-\- GPT-3.5 variant; cleaner narrative sections
+- Two-pass pipeline (micro summaries → final)
 
 
 
-\## v1.0.0
+## v1.4.0
+
+- Rebrand to ForenSynth AI (single-pass)
+
+
+
+## v1.3.1
+
+- Fast profile v1: stability tweaks
+
+
+
+## v1.3.0
+
+- GPT-5 fast profile for throughput tests
+
+
+
+## v1.2.0
+
+- First GPT-5 integration
+
+
+
+## v1.1.0
+
+- GPT-3.5 variant; cleaner narrative sections
+
+
+
+## v1.0.0
 
 \- Baseline Chainsaw summarizer (JSON → report)
 
