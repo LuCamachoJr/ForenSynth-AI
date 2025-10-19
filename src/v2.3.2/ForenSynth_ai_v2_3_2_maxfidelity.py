@@ -50,7 +50,14 @@ except Exception:
     pypandoc = None
 
 # OpenAI SDK
-from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -170,9 +177,15 @@ def parse_args() -> AppConfig:
     p.add_argument("--scope", choices=["dir", "file"], default="dir")
     p.add_argument("--prefer", default="PowerShell-Operational.evtx,Security.evtx")
     p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
-    p.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
+    p.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+    )
     p.add_argument("--sigma-root", type=Path, default=None)
-    p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
+    p.add_argument(
+        "--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports"
+    )
 
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -184,7 +197,9 @@ def parse_args() -> AppConfig:
     p.add_argument("--integrity", choices=["on", "off"], default="off")
     p.add_argument("--run-tests", action="store_true")
     p.add_argument(
-        "--max-fidelity", action="store_true", help="Enable integrity+evidence mode and conservative final call"
+        "--max-fidelity",
+        action="store_true",
+        help="Enable integrity+evidence mode and conservative final call",
     )
 
     p.add_argument("--chunk-model", default=DEFAULT_CHUNK_MODEL)
@@ -284,7 +299,9 @@ def latest_container(root: Path) -> Path:
 
 def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]:
     folder = latest_container(root)
-    console.print(Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED))
+    console.print(
+        Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED)
+    )
     if scope == "dir":
         return "dir", folder
     for name in prefer:
@@ -334,7 +351,9 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
     ]
     (Path(outdir) / "chainsaw_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()
+    ) as prog:
         task = prog.add_task("hunt", total=None)
         try:
             subprocess.run(cmd, check=True)
@@ -397,7 +416,9 @@ def est_tokens(s: str, model_hint: Optional[str] = None) -> int:
 def _extract_event_id(det: Dict[str, Any]) -> str:
     try:
         return str(
-            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "")
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {})
+            .get("System", {})
+            .get("EventID", "")
         )
     except Exception:
         return ""
@@ -421,9 +442,10 @@ def _extract_host_user(det: Dict[str, Any]) -> Tuple[str, str]:
 
 def _extract_script(det: Dict[str, Any]) -> str:
     try:
-        return ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
-            "ScriptBlockText", ""
-        ) or ""
+        return (
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData")
+            or {}
+        ).get("ScriptBlockText", "") or ""
     except Exception:
         return ""
 
@@ -468,7 +490,10 @@ def score_micro_block(block: List[Dict[str, Any]], rule_freq: Dict[str, int]) ->
         if u:
             users.add(u)
     diversity = 1.0 + min(
-        0.6, (0.2 if uniq_rules > 0 else 0.0) + (0.2 if len(hosts) > 1 else 0.0) + (0.2 if len(users) > 1 else 0.0)
+        0.6,
+        (0.2 if uniq_rules > 0 else 0.0)
+        + (0.2 if len(hosts) > 1 else 0.0)
+        + (0.2 if len(users) > 1 else 0.0),
     )
     return base * diversity
 
@@ -603,7 +628,11 @@ def fmt_micro_line(det: Dict[str, Any], include_snip: bool = True, snip_len: int
     tags = ", ".join(_extract_tags(det)) or "None"
     eid = _extract_event_id(det) or "N/A"
     script = _extract_script(det)
-    snip = (str(script)[:snip_len] + ("…" if len(str(script)) > snip_len else "")) if (include_snip and script) else ""
+    snip = (
+        (str(script)[:snip_len] + ("…" if len(str(script)) > snip_len else ""))
+        if (include_snip and script)
+        else ""
+    )
     line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
     if snip:
         line += f" | snippet: {snip}"
@@ -651,7 +680,9 @@ def call_llm(
     retries: int,
     stream: bool = False,
 ) -> str:
-    send_temp = None if (abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5")) else float(temperature)
+    send_temp = (
+        None if (abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5")) else float(temperature)
+    )
     last_err = None
     for i in range(retries):
         try:
@@ -702,12 +733,16 @@ def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
         yield lst[i : i + size]
 
 
-def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int) -> List[List[Dict[str, Any]]]:
+def dynamic_chunks(
+    dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int
+) -> List[List[Dict[str, Any]]]:
     size = max(1, base_size)
     sys_t = est_tokens(SYSTEM_MICRO)
     while size >= 1:
         blocks = list(chunk(dets, size))
-        too_big = any((sys_t + est_tokens(build_micro_prompt(b)) > max_input_tokens) for b in blocks)
+        too_big = any(
+            (sys_t + est_tokens(build_micro_prompt(b)) > max_input_tokens) for b in blocks
+        )
         if not too_big:
             return blocks
         size = max(1, size - 2)
@@ -743,7 +778,14 @@ def micro_parallel(
         tin = est_tokens(SYSTEM_MICRO) + est_tokens(user)
         throttle()
         out = call_llm(
-            client, cfg.chunk_model, SYSTEM_MICRO, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+            client,
+            cfg.chunk_model,
+            SYSTEM_MICRO,
+            user,
+            cfg.temperature,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            stream=False,
         )
         tout = est_tokens(out)
         return i, out, tin, tout
@@ -926,7 +968,9 @@ def build_html(
     )
 
     branding = (
-        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>' if cfg.branding else "<div></div>"
+        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>'
+        if cfg.branding
+        else "<div></div>"
     )
     chunk_count = md_final.count("## Micro ")
     body_html = _html.escape(md_final)
@@ -952,7 +996,9 @@ def build_html(
         if top.get("rules"):
             tables.append("<h3>Top Rules</h3>" + _html_table(["Rule", "Count"], top["rules"]))
         if top.get("event_ids"):
-            tables.append("<h3>Top Event IDs</h3>" + _html_table(["EventID", "Count"], top["event_ids"]))
+            tables.append(
+                "<h3>Top Event IDs</h3>" + _html_table(["EventID", "Count"], top["event_ids"])
+            )
         if top.get("hosts"):
             tables.append("<h3>Top Hosts</h3>" + _html_table(["Host", "Count"], top["hosts"]))
         if top.get("users"):
@@ -1078,7 +1124,15 @@ def write_run_log(csv_path: Path, row: Dict[str, Any]):
             writer.writerow(r)
 
     tbl = Table(title="Recent ForenSynth Runs (latest 5)", box=box.SIMPLE_HEAVY)
-    for h in ["timestamp", "detections", "runtime_sec", "cost_usd", "integrity", "chunk_model", "final_model"]:
+    for h in [
+        "timestamp",
+        "detections",
+        "runtime_sec",
+        "cost_usd",
+        "integrity",
+        "chunk_model",
+        "final_model",
+    ]:
         tbl.add_column(h)
     for r in rows[:5]:
         tbl.add_row(
@@ -1126,10 +1180,15 @@ def main():
         die("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
 
-    console.rule("[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.2 (Max Fidelity)[/bold cyan]")
+    console.rule(
+        "[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.2 (Max Fidelity)[/bold cyan]"
+    )
     if cfg.integrity:
         console.print(
-            Panel.fit("🧠 Integrity Mode Active — prioritizing detection accuracy over cost.", box=box.ROUNDED)
+            Panel.fit(
+                "🧠 Integrity Mode Active — prioritizing detection accuracy over cost.",
+                box=box.ROUNDED,
+            )
         )
     if not cfg.branding:
         console.print(Panel.fit("Clean Report Mode — no branding footer added.", box=box.ROUNDED))
@@ -1166,7 +1225,9 @@ def main():
         html_path = None
         html_str = None
         if cfg.make_html:
-            html_str = build_html("# No detections — nothing to summarize.\n", [], cfg, md_path.name, evd=evd)
+            html_str = build_html(
+                "# No detections — nothing to summarize.\n", [], cfg, md_path.name, evd=evd
+            )
             html_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.html"
             html_path.write_text(html_str, encoding="utf-8")
             ok(f"Report written: {html_path}")
@@ -1192,7 +1253,8 @@ def main():
         blocks = dynamic_chunks(dets, cfg.chunk_size, cfg.max_input_tokens)
         console.print(
             Panel.fit(
-                f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED
+                f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]",
+                box=box.ROUNDED,
             )
         )
         micros, (mi_in, mi_out) = micro_parallel(client, blocks, cfg)
@@ -1207,7 +1269,11 @@ def main():
         if cfg.rpm > 0:
             time.sleep(max(0.0, 60.0 / float(cfg.rpm)))
 
-        console.print(Panel.fit("[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
+        console.print(
+            Panel.fit(
+                "[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED
+            )
+        )
         final_text = call_llm(
             client,
             cfg.final_model,
@@ -1221,7 +1287,10 @@ def main():
 
         usage = {
             cfg.chunk_model: (mi_in, mi_out),
-            cfg.final_model: (est_tokens(SYSTEM_FINAL) + est_tokens(final_user), est_tokens(final_text)),
+            cfg.final_model: (
+                est_tokens(SYSTEM_FINAL) + est_tokens(final_user),
+                est_tokens(final_text),
+            ),
         }
 
         header = (
@@ -1233,7 +1302,9 @@ def main():
             f"- Integrity: ON | Max Fidelity: {'ON' if cfg.max_fidelity else 'OFF'}\n"
             "\n---\n\n## Final Executive Report\n\n"
         )
-        md_final = header + final_text + "\n\n---\n\n## Micro Cluster Summaries\n\n" + "\n\n".join(micros)
+        md_final = (
+            header + final_text + "\n\n---\n\n## Micro Cluster Summaries\n\n" + "\n\n".join(micros)
+        )
 
     else:
         # Single-pass (still include Evidence Snapshot for fidelity)
@@ -1251,7 +1322,12 @@ def main():
             cfg.llm_retries,
             stream=False if cfg.max_fidelity else cfg.stream,
         )
-        usage = {cfg.final_model: (est_tokens(SYSTEM_FINAL) + est_tokens(final_user), est_tokens(md_body))}
+        usage = {
+            cfg.final_model: (
+                est_tokens(SYSTEM_FINAL) + est_tokens(final_user),
+                est_tokens(md_body),
+            )
+        }
         md_final = (
             "# 🔒 ForenSynth AI — DFIR Summary (Single-Pass, Max Fidelity)\n\n"
             f"- Generated: {datetime.now(timezone.utc).isoformat()}\n"
@@ -1273,13 +1349,17 @@ def main():
         html_path.write_text(html_str, encoding="utf-8")
         html_sha = sha256_path(html_path)
         # re-write with html sha included
-        html_str = build_html(md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=html_sha, evd=evd)
+        html_str = build_html(
+            md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=html_sha, evd=evd
+        )
         html_path.write_text(html_str, encoding="utf-8")
         ok(f"Report written: {html_path}")
 
     if cfg.make_pdf and pypandoc is not None:
         try:
-            tmp_html = html_str or build_html(md_final, dets, cfg, md_path.name, md_sha256=md_sha, evd=evd)
+            tmp_html = html_str or build_html(
+                md_final, dets, cfg, md_path.name, md_sha256=md_sha, evd=evd
+            )
             pdf_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.pdf"
             pypandoc.convert_text(tmp_html, to="pdf", format="html", outputfile=str(pdf_path))  # type: ignore
             ok(f"PDF written: {pdf_path}")

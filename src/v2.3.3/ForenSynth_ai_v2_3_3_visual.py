@@ -56,7 +56,14 @@ except Exception:
     pypandoc = None
 
 # OpenAI SDK
-from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -165,9 +172,15 @@ def parse_args() -> AppConfig:
     p.add_argument("--scope", choices=["dir", "file"], default="dir")
     p.add_argument("--prefer", default="PowerShell-Operational.evtx,Security.evtx")
     p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
-    p.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
+    p.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+    )
     p.add_argument("--sigma-root", type=Path, default=None)
-    p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
+    p.add_argument(
+        "--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports"
+    )
 
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -276,7 +289,9 @@ def latest_container(root: Path) -> Path:
 
 def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]:
     folder = latest_container(root)
-    console.print(Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED))
+    console.print(
+        Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED)
+    )
     if scope == "dir":
         return "dir", folder
     for name in prefer:
@@ -324,7 +339,9 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
         "--output",
         str(out_path),
     ]
-    with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()
+    ) as prog:
         task = prog.add_task("hunt", total=None)
         try:
             subprocess.run(cmd, check=True)
@@ -385,7 +402,9 @@ def est_tokens(s: str, model_hint: str = "gpt-4o") -> int:
 def _extract_event_id(det: Dict[str, Any]) -> str:
     try:
         return str(
-            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "")
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {})
+            .get("System", {})
+            .get("EventID", "")
         )
     except Exception:
         return ""
@@ -416,9 +435,9 @@ def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     freq = rule_freq.get(rule, 1)
     rarity = 1.0 + min(0.8, 1.0 / math.sqrt(freq))
 
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
-        "ScriptBlockText", ""
-    )
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
     script_bonus = 1.0 + min(0.5, len(script) / 2000.0)
 
     return mitre_bonus * sev * eid_w * rarity * script_bonus
@@ -442,10 +461,14 @@ def fmt_micro_line(det: Dict[str, Any], include_snip: bool = True, snip_len: int
     rule = det.get("name", (det.get("rule", {}) or {}).get("title", "N/A"))
     tags = ", ".join(_extract_tags(det)) or "None"
     eid = _extract_event_id(det) or "N/A"
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
-        "ScriptBlockText", ""
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
+    snip = (
+        (script[:snip_len] + ("…" if len(script) > snip_len else ""))
+        if (include_snip and script)
+        else ""
     )
-    snip = (script[:snip_len] + ("…" if len(script) > snip_len else "")) if (include_snip and script) else ""
     line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
     if snip:
         line += f" | snippet: {snip}"
@@ -489,7 +512,9 @@ def call_llm(
     retries: int,
     stream: bool = False,
 ) -> str:
-    send_temp = None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    send_temp = (
+        None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    )
     last_err = None
     for i in range(retries):
         try:
@@ -540,7 +565,9 @@ def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
         yield lst[i : i + size]
 
 
-def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int) -> List[List[Dict[str, Any]]]:
+def dynamic_chunks(
+    dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int
+) -> List[List[Dict[str, Any]]]:
     size = max(1, base_size)
     while True:
         blocks = list(chunk(dets, size))
@@ -583,7 +610,14 @@ def micro_parallel(
         tin = est_tokens(SYSTEM_MICRO) + est_tokens(user)
         throttle()
         out = call_llm(
-            client, cfg.chunk_model, SYSTEM_MICRO, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+            client,
+            cfg.chunk_model,
+            SYSTEM_MICRO,
+            user,
+            cfg.temperature,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            stream=False,
         )
         tout = est_tokens(out)
         return i, out, tin, tout
@@ -607,7 +641,9 @@ def micro_parallel(
     return micros, (usage_in, usage_out)
 
 
-def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int) -> List[str]:
+def select_best_micros(
+    blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int
+) -> List[str]:
     rule_freq: Dict[str, int] = {}
     for b in blocks:
         for d in b:
@@ -633,23 +669,35 @@ def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], ma
     return selected
 
 
-def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+def two_pass(
+    client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig
+) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     blocks = dynamic_chunks(dets, cfg.chunk_size, cfg.max_input_tokens)
     if not blocks:
         return "# No detections — nothing to summarize.", {}
 
     console.print(
-        Panel.fit(f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED)
+        Panel.fit(
+            f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]",
+            box=box.ROUNDED,
+        )
     )
     micros, (mi_in, mi_out) = micro_parallel(client, blocks, cfg)
 
-    console.print(Panel.fit("[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
+    console.print(
+        Panel.fit(
+            "[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED
+        )
+    )
     selected = select_best_micros(blocks, micros, cfg.max_input_tokens)
     final_user = build_final_prompt(selected)
 
     final_text = ""
     with Progress(
-        SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()
+        SpinnerColumn(),
+        TextColumn("[bold]Final Merge[/bold]"),
+        BarColumn(bar_width=None),
+        TimeElapsedColumn(),
     ) as prog:
         task = prog.add_task("final", total=None)
         if cfg.rpm > 0:
@@ -683,7 +731,10 @@ def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tupl
 
     usage = {
         cfg.chunk_model: (mi_in, mi_out),
-        cfg.final_model: (est_tokens(SYSTEM_FINAL) + est_tokens(final_user), est_tokens(final_text)),
+        cfg.final_model: (
+            est_tokens(SYSTEM_FINAL) + est_tokens(final_user),
+            est_tokens(final_text),
+        ),
     }
 
     header = (
@@ -708,7 +759,12 @@ def _write_csv(path: Path, headers: List[str], rows: List[Tuple[Any, ...]]):
         writer = csv.writer(f)
         writer.writerow(headers)
         for r in rows:
-            writer.writerow([x if not isinstance(x, (list, dict)) else json.dumps(x, ensure_ascii=False) for x in r])
+            writer.writerow(
+                [
+                    x if not isinstance(x, (list, dict)) else json.dumps(x, ensure_ascii=False)
+                    for x in r
+                ]
+            )
 
 
 def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
@@ -745,7 +801,11 @@ def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     )
 
     def write_top(name: str, pairs: List[List[Any]]):
-        _write_csv(base / f"top_{name}.csv", [name[:-1] if name.endswith("s") else name, "count"], pairs or [])
+        _write_csv(
+            base / f"top_{name}.csv",
+            [name[:-1] if name.endswith("s") else name, "count"],
+            pairs or [],
+        )
 
     write_top("rules", top.get("rules", []))
     write_top("event_ids", top.get("event_ids", []))
@@ -983,7 +1043,11 @@ window.addEventListener('resize', ()=>{
 
 
 def build_html(
-    md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outname: str, evd: Dict[str, Any] = None
+    md_final: str,
+    dets: List[Dict[str, Any]],
+    cfg: AppConfig,
+    outname: str,
+    evd: Dict[str, Any] = None,
 ) -> str:
     counts = build_heatmap_counts(dets)
     by_day = counts_by_day(dets)
@@ -1007,7 +1071,9 @@ def build_html(
     )
 
     branding = (
-        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>' if cfg.branding else "<div></div>"
+        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>'
+        if cfg.branding
+        else "<div></div>"
     )
     body_html = _html.escape(md_final)
 
@@ -1130,7 +1196,16 @@ def build_html(
     if (d3) { d3.__redraw = ()=> drawDonut('donut_day', asPairs(DAY_DATA), 'Detections per Day', 'legend_day'); d3.__redraw(); }
   })();
 """
-    script_block = "<script>\n" + HEATMAP_JS + "\n" + DONUT_JS + "\n" + script_data + script_tail + "\n</script>\n"
+    script_block = (
+        "<script>\n"
+        + HEATMAP_JS
+        + "\n"
+        + DONUT_JS
+        + "\n"
+        + script_data
+        + script_tail
+        + "\n</script>\n"
+    )
 
     html += script_block + "</body>\n</html>\n"
     return html
@@ -1176,7 +1251,15 @@ def write_run_log(csv_path: Path, row: Dict[str, Any]):
             writer.writerow(r)
 
     tbl = Table(title="Recent ForenSynth Runs (latest 5)", box=box.SIMPLE_HEAVY)
-    for h in ["timestamp", "detections", "runtime_sec", "cost_usd", "integrity", "chunk_model", "final_model"]:
+    for h in [
+        "timestamp",
+        "detections",
+        "runtime_sec",
+        "cost_usd",
+        "integrity",
+        "chunk_model",
+        "final_model",
+    ]:
         tbl.add_column(h)
     for r in rows[:5]:
         tbl.add_row(
@@ -1220,10 +1303,15 @@ def main():
 
     if cfg.integrity:
         console.print(
-            Panel.fit("🧠 Integrity Mode Active — prioritizing detection accuracy over cost.", box=box.ROUNDED)
+            Panel.fit(
+                "🧠 Integrity Mode Active — prioritizing detection accuracy over cost.",
+                box=box.ROUNDED,
+            )
         )
 
-    console.rule("[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.3 (Visual Refresh)[/bold cyan]")
+    console.rule(
+        "[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.3 (Visual Refresh)[/bold cyan]"
+    )
     if not cfg.branding:
         console.print(Panel.fit("Clean Report Mode — no branding footer added.", box=box.ROUNDED))
 
@@ -1281,7 +1369,9 @@ def main():
         md_path = outdir / f"forensynth_summary_{stamp.split('_')[0]}.md"
         md_path.write_text("# No detections — nothing to summarize.\n", encoding="utf-8")
         if cfg.make_html:
-            html = build_html("# No detections — nothing to summarize.\n", [], cfg, md_path.name, evd=evd)
+            html = build_html(
+                "# No detections — nothing to summarize.\n", [], cfg, md_path.name, evd=evd
+            )
             html_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.html"
             html_path.write_text(html, encoding="utf-8")
             ok(f"Report written: {html_path}")
@@ -1315,7 +1405,10 @@ def main():
             user = "\n".join(parts[:-10])
         final_text = ""
         with Progress(
-            SpinnerColumn(), TextColumn("[bold]Final Merge[/bold]"), BarColumn(bar_width=None), TimeElapsedColumn()
+            SpinnerColumn(),
+            TextColumn("[bold]Final Merge[/bold]"),
+            BarColumn(bar_width=None),
+            TimeElapsedColumn(),
         ) as prog:
             task = prog.add_task("final", total=None)
             final_text = call_llm(
@@ -1397,7 +1490,11 @@ def _fake_det(ts: str, name: str, eid: str, tags: List[str], script: str = "") -
         "timestamp": ts,
         "name": name,
         "tags": tags,
-        "document": {"data": {"Event": {"System": {"EventID": eid}, "EventData": {"ScriptBlockText": script}}}},
+        "document": {
+            "data": {
+                "Event": {"System": {"EventID": eid}, "EventData": {"ScriptBlockText": script}}
+            }
+        },
     }
 
 
@@ -1407,7 +1504,13 @@ def _run_tests():
     class TokenGuardTests(unittest.TestCase):
         def test_dynamic_chunks_guard(self):
             dets = [
-                _fake_det("2024-01-01T00:00:00Z", f"Rule T1059.{i % 3}", "4688", ["high", "execution"], "A" * 400)
+                _fake_det(
+                    "2024-01-01T00:00:00Z",
+                    f"Rule T1059.{i % 3}",
+                    "4688",
+                    ["high", "execution"],
+                    "A" * 400,
+                )
                 for i in range(200)
             ]
             blocks = dynamic_chunks(dets, base_size=50, max_input_tokens=6000)

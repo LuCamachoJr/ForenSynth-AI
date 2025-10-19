@@ -221,7 +221,9 @@ def find_latest_container(root: Path) -> Path:
     return latest
 
 
-def chainsaw_hunt_dir(evtx_dir: Path, rules: Path, mapping: Path, out_path: Path) -> Tuple[int, List[Dict[str, Any]]]:
+def chainsaw_hunt_dir(
+    evtx_dir: Path, rules: Path, mapping: Path, out_path: Path
+) -> Tuple[int, List[Dict[str, Any]]]:
     # Minimal respectful banner
     console.print("\n[bold]🪓 Chainsaw Module Active — Sigma Hunt in Progress…[/bold]\n")
     cmd = [
@@ -240,7 +242,11 @@ def chainsaw_hunt_dir(evtx_dir: Path, rules: Path, mapping: Path, out_path: Path
     ]
     try:
         with Progress(
-            SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn(), transient=True
+            SpinnerColumn(),
+            TextColumn("[bold]Hunting[/bold]"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            transient=True,
         ) as prog:
             task = prog.add_task("hunt", total=None)
             subprocess.run(cmd, check=True)
@@ -296,7 +302,10 @@ def call_llm(
                 # Minimal streaming display (for demos)
                 resp = client.chat.completions.create(
                     **payload_base,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
                     stream=True,
                 )
                 out = []
@@ -311,7 +320,10 @@ def call_llm(
             else:
                 resp = client.chat.completions.create(
                     **payload_base,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
                 )
                 return resp.choices[0].message.content or ""
         except (RateLimitError, APIConnectionError, APIError) as e:
@@ -341,12 +353,18 @@ def build_micro_prompt(block: List[Dict[str, Any]]) -> str:
         ts = d.get("timestamp", "N/A")
         name = d.get("name", "(untitled)")
         tags = ", ".join(d.get("tags", []) or []) or "None"
-        eid = (((d.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "?")
+        eid = (
+            (((d.get("document") or {}).get("data") or {}).get("Event") or {})
+            .get("System", {})
+            .get("EventID", "?")
+        )
         lines.append(f"- [{ts}] {name} (EventID {eid}; Tags: {tags})")
     return "\n".join(lines)
 
 
-def two_pass(client: OpenAI, detections: List[Dict[str, Any]], cfg: Config) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+def two_pass(
+    client: OpenAI, detections: List[Dict[str, Any]], cfg: Config
+) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     # Chunk and micro summarize
     blocks = list(chunk_list(detections, cfg.chunk_size))
     usages: Dict[str, Tuple[int, int]] = defaultdict(lambda: (0, 0))
@@ -367,7 +385,14 @@ def two_pass(client: OpenAI, detections: List[Dict[str, Any]], cfg: Config) -> T
             user = build_micro_prompt(blk)
             t0 = time.time()
             content = call_llm(
-                client, cfg.chunk_model, SYSTEM, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+                client,
+                cfg.chunk_model,
+                SYSTEM,
+                user,
+                cfg.temperature,
+                cfg.llm_timeout,
+                cfg.llm_retries,
+                stream=False,
             )
             time.time() - t0
             usages[cfg.chunk_model] = (
@@ -379,12 +404,16 @@ def two_pass(client: OpenAI, detections: List[Dict[str, Any]], cfg: Config) -> T
 
     # Final merge — spinner + elapsed timer
     info("Compiling executive summary with final model…")
-    final_user = "Merge the following micro-summaries into a single executive DFIR report:\n\n" + "\n\n---\n\n".join(
-        micro_sections
+    final_user = (
+        "Merge the following micro-summaries into a single executive DFIR report:\n\n"
+        + "\n\n---\n\n".join(micro_sections)
     )
     time.time()
     with Progress(
-        SpinnerColumn(), TextColumn("[bold]🧠 Final summary in progress…[/bold]"), TimeElapsedColumn(), transient=False
+        SpinnerColumn(),
+        TextColumn("[bold]🧠 Final summary in progress…[/bold]"),
+        TimeElapsedColumn(),
+        transient=False,
     ) as prog:
         task = prog.add_task("final", total=None)
         final = call_llm(
@@ -434,7 +463,12 @@ def bucket_per_hour(detections: List[Dict[str, Any]]) -> Tuple[List[str], List[i
 
 
 def html_report(
-    title: str, md_body: str, detections: List[Dict[str, Any]], meta: Dict[str, Any], branding: bool, toc: bool
+    title: str,
+    md_body: str,
+    detections: List[Dict[str, Any]],
+    meta: Dict[str, Any],
+    branding: bool,
+    toc: bool,
 ) -> str:
     labels, values = bucket_per_hour(detections)
     # simple anchors for TOC
@@ -614,15 +648,28 @@ def parse_args() -> Config:
     ap = argparse.ArgumentParser(description="ForenSynth AI v2.1a — DFIR Intelligence Engine")
     ap.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
     ap.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
-    ap.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
-    ap.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
+    ap.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+    )
+    ap.add_argument(
+        "--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports"
+    )
     ap.add_argument("--two-pass", action="store_true")
     ap.add_argument("--make-html", action="store_true")
     ap.add_argument("--fast", action="store_true", help="Enable faster heuristics (UI only hint).")
     ap.add_argument("--branding", choices=["on", "off"], default="off")
     ap.add_argument("--toc", choices=["on", "off"], default="off")
-    ap.add_argument("--integrity", choices=["on", "off"], default="on", help="DFIR-grade accuracy mode.")
-    ap.add_argument("--stream", choices=["on", "off"], default="off", help="Stream final merge output (demo mode).")
+    ap.add_argument(
+        "--integrity", choices=["on", "off"], default="on", help="DFIR-grade accuracy mode."
+    )
+    ap.add_argument(
+        "--stream",
+        choices=["on", "off"],
+        default="off",
+        help="Stream final merge output (demo mode).",
+    )
     ap.add_argument("--rpm", type=int, default=0)
     ap.add_argument("--micro-workers", type=int, default=1)
     ap.add_argument("--chunk-size", type=int, default=25)
@@ -729,7 +776,9 @@ def main():
                 cfg.branding,
                 cfg.toc,
             )
-            (outdir / f"forensynth_report_{run_stamp.split('_')[0]}.html").write_text(html, encoding="utf-8")
+            (outdir / f"forensynth_report_{run_stamp.split('_')[0]}.html").write_text(
+                html, encoding="utf-8"
+            )
         # log and exit
         log_csv = cfg.outdir / "run_log.csv"
         write_run_log(

@@ -176,9 +176,15 @@ def parse_args() -> AppConfig:
     p.add_argument("--scope", choices=["dir", "file"], default="dir")
     p.add_argument("--prefer", default="PowerShell-Operational.evtx,Security.evtx")
     p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
-    p.add_argument("--mapping", type=Path, default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml")
+    p.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+    )
     p.add_argument("--sigma-root", type=Path, default=None)
-    p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports")
+    p.add_argument(
+        "--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports"
+    )
 
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -282,7 +288,9 @@ def latest_container(root: Path) -> Path:
 
 def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]:
     folder = latest_container(root)
-    console.print(Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED))
+    console.print(
+        Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED)
+    )
     if scope == "dir":
         return "dir", folder
     for name in prefer:
@@ -333,7 +341,9 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
     # log exact command for reproducibility
     (Path(outdir) / "chainsaw_cmd.txt").write_text(" ".join(cmd), encoding="utf-8")
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()
+    ) as prog:
         task = prog.add_task("hunt", total=None)
         try:
             subprocess.run(cmd, check=True)
@@ -396,7 +406,9 @@ def est_tokens(s: str, model_hint: Optional[str] = None) -> int:
 def _extract_event_id(det: Dict[str, Any]) -> str:
     try:
         return str(
-            (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", "")
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {})
+            .get("System", {})
+            .get("EventID", "")
         )
     except Exception:
         return ""
@@ -439,9 +451,9 @@ def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     rarity = 1.0 + min(0.8, 1.0 / max(1.0, math.sqrt(freq)))
 
     # Longer script/text may carry more context (cap)
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
-        "ScriptBlockText", ""
-    )
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
     script_bonus = 1.0 + min(0.5, len(str(script)) / 2000.0)
 
     return mitre_bonus * sev * eid_w * rarity * script_bonus
@@ -462,7 +474,10 @@ def score_micro_block(block: List[Dict[str, Any]], rule_freq: Dict[str, int]) ->
         if u:
             users.add(u)
     diversity = 1.0 + min(
-        0.6, (0.2 if uniq_rules > 0 else 0.0) + (0.2 if len(hosts) > 1 else 0.0) + (0.2 if len(users) > 1 else 0.0)
+        0.6,
+        (0.2 if uniq_rules > 0 else 0.0)
+        + (0.2 if len(hosts) > 1 else 0.0)
+        + (0.2 if len(users) > 1 else 0.0),
     )
     return base * diversity
 
@@ -475,10 +490,14 @@ def fmt_micro_line(det: Dict[str, Any], include_snip: bool = True, snip_len: int
     rule = det.get("name", (det.get("rule", {}) or {}).get("title", "N/A"))
     tags = ", ".join(_extract_tags(det)) or "None"
     eid = _extract_event_id(det) or "N/A"
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get(
-        "ScriptBlockText", ""
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
+    snip = (
+        (str(script)[:snip_len] + ("…" if len(str(script)) > snip_len else ""))
+        if (include_snip and script)
+        else ""
     )
-    snip = (str(script)[:snip_len] + ("…" if len(str(script)) > snip_len else "")) if (include_snip and script) else ""
     line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
     if snip:
         line += f" | snippet: {snip}"
@@ -522,7 +541,9 @@ def call_llm(
     retries: int,
     stream: bool = False,
 ) -> str:
-    send_temp = None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    send_temp = (
+        None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    )
     last_err = None
     for i in range(retries):
         try:
@@ -573,13 +594,17 @@ def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
         yield lst[i : i + size]
 
 
-def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int) -> List[List[Dict[str, Any]]]:
+def dynamic_chunks(
+    dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int
+) -> List[List[Dict[str, Any]]]:
     size = max(1, base_size)
     sys_t = est_tokens(SYSTEM_MICRO)
     while size >= 1:
         blocks = list(chunk(dets, size))
         # Ensure each block fits (since micro calls are per-block)
-        too_big = any((sys_t + est_tokens(build_micro_prompt(b)) > max_input_tokens) for b in blocks)
+        too_big = any(
+            (sys_t + est_tokens(build_micro_prompt(b)) > max_input_tokens) for b in blocks
+        )
         if not too_big:
             return blocks
         size = max(1, size - 2)
@@ -615,7 +640,14 @@ def micro_parallel(
         tin = est_tokens(SYSTEM_MICRO) + est_tokens(user)
         throttle()
         out = call_llm(
-            client, cfg.chunk_model, SYSTEM_MICRO, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+            client,
+            cfg.chunk_model,
+            SYSTEM_MICRO,
+            user,
+            cfg.temperature,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            stream=False,
         )
         tout = est_tokens(out)
         return i, out, tin, tout
@@ -639,7 +671,9 @@ def micro_parallel(
     return micros, (usage_in, usage_out)
 
 
-def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int) -> List[str]:
+def select_best_micros(
+    blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int
+) -> List[str]:
     # Score by block content + diversity; then pack under token budget
     # Build rule frequencies
     rule_freq: Dict[str, int] = {}
@@ -671,17 +705,26 @@ def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], ma
     return selected
 
 
-def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+def two_pass(
+    client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig
+) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     blocks = dynamic_chunks(dets, cfg.chunk_size, cfg.max_input_tokens)
     if not blocks:
         return "# No detections — nothing to summarize.", {}
 
     console.print(
-        Panel.fit(f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED)
+        Panel.fit(
+            f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]",
+            box=box.ROUNDED,
+        )
     )
     micros, (mi_in, mi_out) = micro_parallel(client, blocks, cfg)
 
-    console.print(Panel.fit("[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
+    console.print(
+        Panel.fit(
+            "[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED
+        )
+    )
 
     selected = select_best_micros(blocks, micros, cfg.max_input_tokens)
     final_user = build_final_prompt(selected)
@@ -732,7 +775,10 @@ def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tupl
 
     usage = {
         cfg.chunk_model: (mi_in, mi_out),
-        cfg.final_model: (est_tokens(SYSTEM_FINAL) + est_tokens(final_user), est_tokens(final_text)),
+        cfg.final_model: (
+            est_tokens(SYSTEM_FINAL) + est_tokens(final_user),
+            est_tokens(final_text),
+        ),
     }
 
     header = (
@@ -857,7 +903,9 @@ def build_html(
     )
 
     branding = (
-        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>' if cfg.branding else "<div></div>"
+        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>'
+        if cfg.branding
+        else "<div></div>"
     )
     chunk_count = md_final.count("## Micro ")
     body_html = _html.escape(md_final)  # safe, present inside <pre>
@@ -964,7 +1012,15 @@ def write_run_log(csv_path: Path, row: Dict[str, Any]):
             writer.writerow(r)
 
     tbl = Table(title="Recent ForenSynth Runs (latest 5)", box=box.SIMPLE_HEAVY)
-    for h in ["timestamp", "detections", "runtime_sec", "cost_usd", "integrity", "chunk_model", "final_model"]:
+    for h in [
+        "timestamp",
+        "detections",
+        "runtime_sec",
+        "cost_usd",
+        "integrity",
+        "chunk_model",
+        "final_model",
+    ]:
         tbl.add_column(h)
     for r in rows[:5]:
         tbl.add_row(
@@ -1023,7 +1079,10 @@ def main():
 
     if cfg.integrity:
         console.print(
-            Panel.fit("🧠 Integrity Mode Active — prioritizing detection accuracy over cost.", box=box.ROUNDED)
+            Panel.fit(
+                "🧠 Integrity Mode Active — prioritizing detection accuracy over cost.",
+                box=box.ROUNDED,
+            )
         )
 
     console.rule("[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.1[/bold cyan]")
@@ -1058,7 +1117,9 @@ def main():
         html_path = None
         html_str = None
         if cfg.make_html:
-            html_str = build_html("# No detections — nothing to summarize.\n", [], cfg, md_path.name)
+            html_str = build_html(
+                "# No detections — nothing to summarize.\n", [], cfg, md_path.name
+            )
             html_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.html"
             html_path.write_text(html_str, encoding="utf-8")
             ok(f"Report written: {html_path}")
@@ -1126,7 +1187,9 @@ def main():
         html_path.write_text(html_str, encoding="utf-8")
         html_sha = sha256_path(html_path)
         # Re-write to include HTML SHA as well (footer shows both)
-        html_str = build_html(md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=html_sha)
+        html_str = build_html(
+            md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=html_sha
+        )
         html_path.write_text(html_str, encoding="utf-8")
         ok(f"Report written: {html_path}")
 
@@ -1134,7 +1197,9 @@ def main():
     if cfg.make_pdf and pypandoc is not None:
         try:
             if html_str is None:
-                tmp_html = build_html(md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=None)
+                tmp_html = build_html(
+                    md_final, dets, cfg, md_path.name, md_sha256=md_sha, html_sha256=None
+                )
             else:
                 tmp_html = html_str
             pdf_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.pdf"
@@ -1202,13 +1267,21 @@ def _run_tests():
     class TokenGuardTests(unittest.TestCase):
         def test_dynamic_chunks_guard(self):
             dets = [
-                _fake_det("2024-01-01T00:00:00Z", f"Rule T1059.{i % 3}", "4688", ["high", "execution"], "A" * 400)
+                _fake_det(
+                    "2024-01-01T00:00:00Z",
+                    f"Rule T1059.{i % 3}",
+                    "4688",
+                    ["high", "execution"],
+                    "A" * 400,
+                )
                 for i in range(200)
             ]
             blocks = dynamic_chunks(dets, base_size=50, max_input_tokens=6000)
             # each block must fit individually
             for b in blocks:
-                self.assertLessEqual(est_tokens(SYSTEM_MICRO) + est_tokens(build_micro_prompt(b)), 6000)
+                self.assertLessEqual(
+                    est_tokens(SYSTEM_MICRO) + est_tokens(build_micro_prompt(b)), 6000
+                )
             self.assertGreater(len(blocks), 1)
 
     class HtmlEscapeTests(unittest.TestCase):
@@ -1254,10 +1327,16 @@ def _run_tests():
         def test_scoring_prefers_mitre_and_rare(self):
             rare = [
                 _fake_det(
-                    "2024-01-01T01:00:00Z", "Suspicious T1059.001", "4688", ["high", "execution"], "cmd.exe /c ..."
+                    "2024-01-01T01:00:00Z",
+                    "Suspicious T1059.001",
+                    "4688",
+                    ["high", "execution"],
+                    "cmd.exe /c ...",
                 )
             ]
-            common = [_fake_det("2024-01-01T02:00:00Z", "Noise", "1", ["info"], "") for _ in range(20)]
+            common = [
+                _fake_det("2024-01-01T02:00:00Z", "Noise", "1", ["info"], "") for _ in range(20)
+            ]
             blocks = [rare, common]
             rf: Dict[str, int] = {}
             for b in blocks:
