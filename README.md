@@ -145,6 +145,44 @@ See `CHANGELOG.md` for a one-line summary per version. Release notes on GitHub p
 
 ---
 
+## Install
+- Python 3.11+
+- Create a venv and install deps:
+    python -m venv venv
+    venv\Scripts\activate
+    pip install -r requirements.txt
+
+## Contributing
+- Open an Issue first for major changes; describe the CLI flags or output you expect.
+- Code style: `ruff format .` then `ruff check . --fix`
+- Python: 3.11+ (no backslash escapes inside f-strings; keep py311-safe)
+- Commit messages: conventional style, e.g. `feat:`, `fix:`, `docs:`, `chore:`
+- PR checklist:
+  - [ ] Added/updated CLI help if new flags (`--help`)
+  - [ ] Updated README examples if behavior changed
+  - [ ] `ruff` passes locally
+
+---
+
+## Optional: LLM provider deps
+# If you’re using OpenAI, install the extras:
+#     pip install -r requirements-llm.txt
+# Set your API key:
+#     $env:OPENAI_API_KEY="sk-..."     # PowerShell
+# or  export OPENAI_API_KEY="sk-..."   # bash/zsh
+
+### Suggested code guard (inside your CLI init)
+# Pseudocode: fail gracefully if OpenAI is enabled but package/env is missing.
+try:
+    import openai  # only when provider == "openai"
+except ImportError as e:
+    raise SystemExit("OpenAI provider selected but 'openai' package not installed. Try: pip install -r requirements-llm.txt")
+
+# Also check:
+# if not os.getenv("OPENAI_API_KEY"):
+#     raise SystemExit("OPENAI_API_KEY is not set.")
+
+---
 
     
 

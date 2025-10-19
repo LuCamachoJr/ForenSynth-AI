@@ -1,5 +1,9 @@
-openai
-jinja2
-pandas
-rich
-pyyaml
+jinja2>=3.1
+pandas>=2.1
+numpy>=1.26
+matplotlib>=3.8
+plotly>=5.22
+pyyaml>=6.0
+rich>=13.7
+typer>=0.12
+requests>=2.31
