@@ -20,7 +20,61 @@ Evidence-forward DFIR reporting engine. This repo reconstructs history from earl
 
 
 
-\## Quickstart
+\## Quickstart (v2.3.3 Visual)
+
+
+
+\### Prereqs
+
+\- Python 3.11+
+
+\- `pip install -r requirements.txt`
+
+
+
+&nbsp;   # Clone \& setup
+
+&nbsp;   git clone https://github.com/LuCamachoJr/ForenSynth-AI.git
+
+&nbsp;   cd ForenSynth-AI
+
+&nbsp;   python -m venv venv
+
+&nbsp;   venv\\Scripts\\activate
+
+&nbsp;   pip install -r requirements.txt
+
+
+
+&nbsp;   # Run (adjust paths)
+
+&nbsp;   python .\\src\\v2.3.3\\forensynth\_ai\_v2\_3\_3\_visual.py `
+
+&nbsp;     --input "E:\\Cases\\case01\\detections\\detections.json" `
+
+&nbsp;     --outdir "E:\\Cases\\case01\\report" `
+
+&nbsp;     --integrity `
+
+&nbsp;     --html --pdf
+
+
+
+\### Outputs
+
+\- `report.md` / `report.html` / \*(optional)\* `report.pdf`
+
+\- `evidence\_snapshot.json` and/or `evidence\_snapshot.csv`
+
+\- `meta.txt` — model, timestamp, and SHA256 (from `--integrity`)
+
+
+
+\### See also
+
+\- Lab Setup \& Telemetry Guide (Sysmon → Chainsaw → Sigma)
+
+\- ForenSynth v2.3.3 Quickstart (detections → narrative + visuals)
 
 
 
