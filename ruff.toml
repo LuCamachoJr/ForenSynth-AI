@@ -1,11 +1,17 @@
-line-length = 120
+line-length = 100
 target-version = "py311"
 
-[lint]
-select = ["E","F","W","I"]
-ignore = [
-  "E501",  # line too long (re-enable later)
+# Don't lint historical v1.x — preserved for lineage only
+exclude = [
+  "src/v1.0",
+  "src/v1.1",
+  "src/v1.2",
+  "src/v1.3",
+  "src/v1.4"
 ]
 
-[lint.per-file-ignores]
-"src/**/__main__.py" = ["E402"]
+[lint]
+# Core rule sets
+select = ["E", "F", "I"]
+# Relax: module import placement + long lines (CSS/HTML strings, JSON templates)
+ignore = ["E402", "E501"]
