@@ -107,7 +107,7 @@ Evidence-forward DFIR reporting engine. This repo reconstructs history from earl
 
 ## Releases, Changelog, and Support
 
-### Status badges (optional)
+### Status badges
 [![Lint](https://github.com/LuCamachoJr/ForenSynth-AI/actions/workflows/lint.yml/badge.svg)](https://github.com/LuCamachoJr/ForenSynth-AI/actions/workflows/lint.yml)
 
 ### Releases (tagged history)
@@ -165,22 +165,25 @@ See `CHANGELOG.md` for a one-line summary per version. Release notes on GitHub p
 ---
 
 ## Optional: LLM provider deps
-# If you’re using OpenAI, install the extras:
-#     pip install -r requirements-llm.txt
-# Set your API key:
-#     $env:OPENAI_API_KEY="sk-..."     # PowerShell
-# or  export OPENAI_API_KEY="sk-..."   # bash/zsh
+
+If you’re using OpenAI, install the extras:
+    pip install -r requirements-llm.txt
+
+Set your API key:
+    # PowerShell
+    $env:OPENAI_API_KEY="sk-..."
+    # bash/zsh
+    export OPENAI_API_KEY="sk-..."
 
 ### Suggested code guard (inside your CLI init)
-# Pseudocode: fail gracefully if OpenAI is enabled but package/env is missing.
-try:
-    import openai  # only when provider == "openai"
-except ImportError as e:
-    raise SystemExit("OpenAI provider selected but 'openai' package not installed. Try: pip install -r requirements-llm.txt")
-
-# Also check:
-# if not os.getenv("OPENAI_API_KEY"):
-#     raise SystemExit("OPENAI_API_KEY is not set.")
+Pseudocode: fail gracefully if OpenAI is enabled but package/env is missing.
+    import os
+    try:
+        import openai  # only when provider == "openai"
+    except ImportError:
+        raise SystemExit("OpenAI provider selected but 'openai' package not installed. Try: pip install -r requirements-llm.txt")
+    if not os.getenv("OPENAI_API_KEY"):
+        raise SystemExit("OPENAI_API_KEY is not set.")
 
 ---
 
