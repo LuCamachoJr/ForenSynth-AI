@@ -1,7 +1,6 @@
 line-length = 100
 target-version = "py311"
 
-# Don't lint historical v1.x — preserved for lineage only
 exclude = [
   "src/v1.0",
   "src/v1.1",
@@ -11,7 +10,5 @@ exclude = [
 ]
 
 [lint]
-# Core rule sets
 select = ["E", "F", "I"]
-# Relax: module import placement + long lines (CSS/HTML strings, JSON templates)
 ignore = ["E402", "E501"]
