@@ -22,7 +22,14 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pypandoc
 import tiktoken
 from dotenv import load_dotenv
-from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
@@ -145,7 +152,9 @@ def parse_args() -> AppConfig:
     p.add_argument("--prefer-logs", type=str, default="PowerShell-Operational.evtx,Security.evtx")
     p.add_argument("--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "chainsaw_summaries")
     p.add_argument("--rules", type=Path, default=Path("/home/kali/tools/sigma/rules"))
-    p.add_argument("--mapping", type=Path, default=Path("/home/kali/tools/chainsaw/sigma-event-logs-all.yml"))
+    p.add_argument(
+        "--mapping", type=Path, default=Path("/home/kali/tools/chainsaw/sigma-event-logs-all.yml")
+    )
     p.add_argument("--sigma-root", type=Path, default=Path("/home/kali/tools/sigma"))
     p.add_argument("--make-pdf", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -165,8 +174,16 @@ def parse_args() -> AppConfig:
     p.add_argument("--rpm", type=int, default=0)
     p.add_argument("--pricing-json", type=str, default=None)
     p.add_argument("--css", type=Path, default=None)
-    p.add_argument("--csv-summary", type=Path, default=Path.home() / "DFIR-Labs" / "chainsaw_summaries" / "summary.csv")
-    p.add_argument("--archive", action="store_true", help="Archive previous dated runs into archive/YYYY-MM-DD/")
+    p.add_argument(
+        "--csv-summary",
+        type=Path,
+        default=Path.home() / "DFIR-Labs" / "chainsaw_summaries" / "summary.csv",
+    )
+    p.add_argument(
+        "--archive",
+        action="store_true",
+        help="Archive previous dated runs into archive/YYYY-MM-DD/",
+    )
     # prompt size controls
     p.add_argument("--no-script", action="store_true")
     p.add_argument("--truncate-script", type=int, default=0)
@@ -238,10 +255,14 @@ def print_source_banners(latest_dir: Path, rules: Path, mapping: Path, sigma_roo
     console.print(Panel.fit(f"[green]✔ Using Chainsaw rules:[/green] {rules}", box=box.ROUNDED))
     console.print(Panel.fit(f"[green]✔ Using Chainsaw mapping:[/green] {mapping}", box=box.ROUNDED))
     if sigma_root:
-        console.print(Panel.fit(f"[green]✔ Using Sigma root:[/green] {sigma_root}", box=box.ROUNDED))
+        console.print(
+            Panel.fit(f"[green]✔ Using Sigma root:[/green] {sigma_root}", box=box.ROUNDED)
+        )
 
 
-def run_chainsaw(src: Path, out_path: Path, rules: Path, mapping: Path, sigma_root: Optional[Path]) -> None:
+def run_chainsaw(
+    src: Path, out_path: Path, rules: Path, mapping: Path, sigma_root: Optional[Path]
+) -> None:
     info("Running Chainsaw hunt…")
     cmd = ["chainsaw", "hunt", str(src), "--mapping", str(mapping), "--rule", str(rules)]
     if sigma_root:
@@ -323,10 +344,16 @@ def load_detections(json_path: Path, mode: str, max_items: int) -> List[Dict[str
             items = _parse_jsonl_text(text)
             if not items:
                 preview = text[:200].replace("\n", "\\n")
-                raise LoaderError("Failed to parse detections as JSON or JSONL. Preview: " + preview)
+                raise LoaderError(
+                    "Failed to parse detections as JSON or JSONL. Preview: " + preview
+                )
             flat: List[Dict[str, Any]] = []
             for it in items:
-                if isinstance(it, dict) and "detections" in it and isinstance(it["detections"], list):
+                if (
+                    isinstance(it, dict)
+                    and "detections" in it
+                    and isinstance(it["detections"], list)
+                ):
                     flat.extend(it["detections"])
                 elif isinstance(it, dict):
                     flat.append(it)
@@ -352,7 +379,9 @@ def _fmt_script(script: str, no_script: bool, trunc: int) -> str:
     return "```\n" + (script or "") + "\n```"
 
 
-def build_chunk_prompt(block: List[Dict[str, Any]], *, no_script: bool, truncate_script: int) -> str:
+def build_chunk_prompt(
+    block: List[Dict[str, Any]], *, no_script: bool, truncate_script: int
+) -> str:
     header = (
         "You are a senior DFIR analyst. Summarize these Windows detection events succinctly. "
         "Group related items, highlight notable TTPs/tooling, and provide an executive summary plus actionable recommendations.\n\n"
@@ -375,7 +404,9 @@ def build_chunk_prompt(block: List[Dict[str, Any]], *, no_script: bool, truncate
     return header + "\n".join(parts)
 
 
-def build_micro_prompt(block: List[Dict[str, Any]], include_script: bool, micro_truncate: int) -> str:
+def build_micro_prompt(
+    block: List[Dict[str, Any]], include_script: bool, micro_truncate: int
+) -> str:
     header = (
         "Micro-summarize these detections for DFIR triage in <= 12 bullets total. "
         "Group similar items, name key TTPs (MITRE IDs if present), mention counts/timestamps if available. "
@@ -392,7 +423,9 @@ def build_micro_prompt(block: List[Dict[str, Any]], include_script: bool, micro_
         script = (doc.get("EventData") or {}).get("ScriptBlockText") or ""
         snippet = ""
         if include_script and micro_truncate > 0 and isinstance(script, str) and script:
-            snippet = script[:micro_truncate] + ("… [truncated]" if len(script) > micro_truncate else "")
+            snippet = script[:micro_truncate] + (
+                "… [truncated]" if len(script) > micro_truncate else ""
+            )
         line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
         if snippet:
             line += f"  | snippet: {snippet}"
@@ -424,14 +457,18 @@ def estimate_tokens(enc: tiktoken.Encoding, text: str) -> int:
         return math.ceil(len(text) / 4)
 
 
-def estimate_cost(usages: Dict[str, Tuple[int, int]], pricing: Dict[str, Dict[str, float]]) -> Tuple[float, List[str]]:
+def estimate_cost(
+    usages: Dict[str, Tuple[int, int]], pricing: Dict[str, Dict[str, float]]
+) -> Tuple[float, List[str]]:
     total = 0.0
     lines = []
     for m, (tin, tout) in usages.items():
         p = pricing.get(m, {"in": 0.0, "out": 0.0})
         cost = (tin / 1000.0) * p["in"] + (tout / 1000.0) * p["out"]
         total += cost
-        lines.append(f"- {m}: in={tin}, out={tout} → ${cost:.6f} (in {p['in']}/k, out {p['out']}/k)")
+        lines.append(
+            f"- {m}: in={tin}, out={tout} → ${cost:.6f} (in {p['in']}/k, out {p['out']}/k)"
+        )
     return round(total, 6), lines
 
 
@@ -441,7 +478,13 @@ def backoff_sleep(i: int):
 
 
 def call_llm(
-    client: OpenAI, model: str, system_prompt: str, user_prompt: str, temperature: float, timeout_s: int, retries: int
+    client: OpenAI,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    timeout_s: int,
+    retries: int,
 ) -> str:
     # Some GPT-5 variants only support default 1.0 temperature
     safe_temp = 1.0 if model.startswith("gpt-5") else temperature
@@ -449,7 +492,10 @@ def call_llm(
         try:
             resp = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 temperature=safe_temp,
                 timeout=timeout_s,
             )
@@ -506,7 +552,9 @@ def micro_parallel(
         user = build_micro_prompt(b, include_script, micro_truncate)
         mi_in += estimate_tokens(enc, DEFAULT_SYSTEM_PROMPT) + estimate_tokens(enc, user)
         limiter.wait()
-        content = call_llm(client, model, DEFAULT_SYSTEM_PROMPT, user, temperature, timeout_s, retries)
+        content = call_llm(
+            client, model, DEFAULT_SYSTEM_PROMPT, user, temperature, timeout_s, retries
+        )
         mi_out += estimate_tokens(enc, content)
         return i, f"## Micro {i + 1}\n{content}"
 
@@ -654,13 +702,21 @@ def two_pass_summarize(
         "## Final Executive Report\n\n"
     )
     appendix = "\n\n---\n\n## Appendix: Micro-Summaries\n\n" + "\n\n".join(micro_sections)
-    return head + final_content + appendix, (mi_in + fin_in), (mi_out + fin_out), usage, t_micro, t_merge
+    return (
+        head + final_content + appendix,
+        (mi_in + fin_in),
+        (mi_out + fin_out),
+        usage,
+        t_micro,
+        t_merge,
+    )
 
 
 # ───────────────────────── IOC Extraction ─────────────────────────────────
 RE_IP = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?!$)|$)){4}\b")
 RE_DOM = re.compile(
-    r"\b(?!(?:localhost|localdomain)\b)(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}\b", re.IGNORECASE
+    r"\b(?!(?:localhost|localdomain)\b)(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}\b",
+    re.IGNORECASE,
 )
 RE_MD5 = re.compile(r"\b[a-fA-F0-9]{32}\b")
 RE_SHA1 = re.compile(r"\b[a-fA-F0-9]{40}\b")
@@ -941,7 +997,10 @@ def main() -> None:
         console.rule("[bold yellow]⚠ No Sigma detections found[/bold yellow]")
         console.print("No Sigma detections found — skipping summarization to save tokens.")
         empty = latest / "chainsaw_summary_empty.md"
-        empty.write_text("# No Sigma detections\n\nChainsaw produced no Sigma hits for this run.\n", encoding="utf-8")
+        empty.write_text(
+            "# No Sigma detections\n\nChainsaw produced no Sigma hits for this run.\n",
+            encoding="utf-8",
+        )
         return
 
     # Prepare chunks & guardrail (single-pass guard)
