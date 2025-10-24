@@ -1,0 +1,8 @@
+=== EVTX Export (Shared Drive) ===
+Source path : E:\evtx_share\DFIR-Lab-Logs\
+Date bucket : 2025-10-24
+Artifacts   :
+  - actions-2025-10-24.csv
+  - rollup-2025-10-24.csv
+  - latest_actions.csv
+Notes       : Exported from target VM via shared folder; raw .evtx not committed by design.
