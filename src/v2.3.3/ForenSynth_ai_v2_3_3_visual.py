@@ -161,6 +161,8 @@ class AppConfig:
 
     micro_workers: int
     rpm: int
+    limit_detections: int
+    sample_step: int
 
     export_evidence_csv: bool
     chart_style: str  # 'heatmap' | 'pies' | 'both' | 'off'
@@ -207,6 +209,10 @@ def parse_args() -> AppConfig:
 
     p.add_argument("--export-evidence-csv", action="store_true")
     p.add_argument("--chart-style", choices=["heatmap", "pies", "both", "off"], default="both")
+    p.add_argument("--limit-detections", type=int, default=0,
+                   help="If > 0, limit the number of detections processed after loading (applied post-                  Chainsaw).")
+    p.add_argument("--sample-step", type=int, default=0,
+                   help="If > 1, keep every Nth detection before applying the limit (simple stratified     sample).")
 
     a = p.parse_args()
     prefer = [s.strip() for s in a.prefer.split(",") if s.strip()]
@@ -252,6 +258,8 @@ def parse_args() -> AppConfig:
         rpm=max(0, a.rpm),
         export_evidence_csv=a.export_evidence_csv,
         chart_style=a.chart_style,
+        limit_detections=a.limit_detections,
+        sample_step=a.sample_step
     )
 
 
@@ -824,6 +832,35 @@ def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     write_ioc("md5", iocs.get("md5", []))
     write_ioc("paths", iocs.get("paths", []))
 
+#
+────────────────────────────────────────────────────────────────────────────
+# Sampling Helper
+#
+────────────────────────────────────────────────────────────────────────────
+def apply_sampling(dets: List[Dict[str, Any]], limit: int = 0, step: int = 0, sort_time: bool = False) -> List[Dict[str, Any]]:
+    """
+    Optionally sub-sample and/or cap detections before the LLM phases.
+    - step > 1  → keep every Nth record (0, N, 2N, ...)
+    - limit > 0 → truncate to first `limit` items after step filter
+    - sort_time → if True, attempt chronological sort by .timestamp before sampling
+    """
+    original = len(dets)
+    if sort_time:
+        try:
+            dets = sorted(dets, key=lambda d: (d.get("timestamp") or ""))
+        except Exception:
+            # keep original order if timestamp sort fails
+            pass
+
+    if step and step > 1:
+        dets = [v for i, v in enumerate(dets) if i % step == 0]
+
+    if limit and limit > 0:
+        dets = dets[:limit]
+
+    if len(dets) != original:
+        info(f"Sampling applied: {original} → {len(dets)} (step={step or 1}, limit={limit or 'none'})")
+    return dets
 
 # ────────────────────────────────────────────────────────────────────────────
 # Heatmap & Donut helpers + HTML
@@ -1332,6 +1369,9 @@ def main():
     dets = load_detections(det_json)
     count = len(dets)
     ok(f"Detections loaded: {count}")
+
+    # Optional post-hunt sampling to bound time/cost for PoC runs
+    dets = apply_sampling(dets, limit=cfg.limit_detections, step=cfg.sample_step, sort_time=False)
 
     # Build simple evidence from detections
     evd = {
