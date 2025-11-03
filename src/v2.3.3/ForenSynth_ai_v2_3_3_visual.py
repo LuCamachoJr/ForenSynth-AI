@@ -832,11 +832,9 @@ def write_evidence_csvs(evd: Dict[str, Any], outdir: Path):
     write_ioc("md5", iocs.get("md5", []))
     write_ioc("paths", iocs.get("paths", []))
 
-#
-────────────────────────────────────────────────────────────────────────────
+#────────────────────────────────────────────────────────────────────────────
 # Sampling Helper
-#
-────────────────────────────────────────────────────────────────────────────
+#────────────────────────────────────────────────────────────────────────────
 def apply_sampling(dets: List[Dict[str, Any]], limit: int = 0, step: int = 0, sort_time: bool = False) -> List[Dict[str, Any]]:
     """
     Optionally sub-sample and/or cap detections before the LLM phases.
