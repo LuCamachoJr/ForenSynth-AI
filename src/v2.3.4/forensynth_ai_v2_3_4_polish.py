@@ -43,12 +43,12 @@ except Exception:
     pypandoc = None
 
 # OpenAI SDK
-from openai import OpenAI
 from openai import (
     APIConnectionError,
     APIError,
     APITimeoutError,
     BadRequestError,
+    OpenAI,
     RateLimitError,
 )
 
@@ -56,7 +56,7 @@ from openai import (
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 console = Console()
@@ -86,12 +86,31 @@ SYSTEM_FINAL = (
 MITRE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b", re.IGNORECASE)
 
 EVENT_WEIGHTS = {
-    "1": 1.2, "3": 1.3, "7": 1.1, "8": 1.1, "10": 1.4, "11": 1.1, "4624": 1.1, "4625": 1.1,
-    "4688": 1.6, "4697": 1.4, "4720": 1.5, "4728": 1.3, "4732": 1.3, "7045": 1.5,
+    "1": 1.2,
+    "3": 1.3,
+    "7": 1.1,
+    "8": 1.1,
+    "10": 1.4,
+    "11": 1.1,
+    "4624": 1.1,
+    "4625": 1.1,
+    "4688": 1.6,
+    "4697": 1.4,
+    "4720": 1.5,
+    "4728": 1.3,
+    "4732": 1.3,
+    "7045": 1.5,
 }
 SEVERITY_TAG_BOOSTS = {
-    "critical": 2.0, "high": 1.6, "medium": 1.3, "suspicious": 1.2,
-    "credential": 1.3, "persistence": 1.4, "lateral": 1.4, "exfil": 1.6, "ransom": 1.8,
+    "critical": 2.0,
+    "high": 1.6,
+    "medium": 1.3,
+    "suspicious": 1.2,
+    "credential": 1.3,
+    "persistence": 1.4,
+    "lateral": 1.4,
+    "exfil": 1.6,
+    "ransom": 1.8,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,6 +121,7 @@ try:
 except Exception:
     load_dotenv = None  # optional
 
+
 def _ok_perms(path: Path) -> bool:
     try:
         st = path.stat()
@@ -111,6 +131,7 @@ def _ok_perms(path: Path) -> bool:
     world_readable = bool(st.st_mode & stat.S_IROTH)
     return not (world_writable or world_readable)
 
+
 def _safe_load_dotenv():
     if not load_dotenv:
         return
@@ -118,7 +139,9 @@ def _safe_load_dotenv():
         if p.exists() and _ok_perms(p):
             load_dotenv(p, override=False)
 
+
 _safe_load_dotenv()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI & App State
@@ -159,15 +182,22 @@ class AppConfig:
     sample_step: int
     export_evidence_csv: bool
 
+
 def parse_args() -> AppConfig:
     p = argparse.ArgumentParser(description="ForenSynth AI v2.3.4 (Polish)")
     p.add_argument("--evtx-root", type=Path, default=Path("/mnt/evtx_share/DFIR-Lab-Logs"))
     p.add_argument("--scope", choices=["dir", "file"], default="dir")
     p.add_argument("--prefer", default="PowerShell-Operational.evtx,Security.evtx")
-    p.add_argument("--rules", type=Path, default=Path.home()/"tools"/"sigma"/"rules")
-    p.add_argument("--mapping", type=Path, default=Path.home()/"tools"/"chainsaw"/"sigma-event-logs-all.yml")
+    p.add_argument("--rules", type=Path, default=Path.home() / "tools" / "sigma" / "rules")
+    p.add_argument(
+        "--mapping",
+        type=Path,
+        default=Path.home() / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
+    )
     p.add_argument("--sigma-root", type=Path, default=None)
-    p.add_argument("--outdir", type=Path, default=Path.home()/"DFIR-Labs"/"ForenSynth"/"Reports")
+    p.add_argument(
+        "--outdir", type=Path, default=Path.home() / "DFIR-Labs" / "ForenSynth" / "Reports"
+    )
 
     p.add_argument("--two-pass", action="store_true")
     p.add_argument("--make-html", action="store_true")
@@ -189,11 +219,23 @@ def parse_args() -> AppConfig:
     p.add_argument("--max-chunks", type=int, default=120)
 
     p.add_argument("--micro-workers", type=int, default=0, help="0=auto")
-    p.add_argument("--rpm", type=int, default=0, help="Rate limit per-minute across micro jobs (0=off)")
+    p.add_argument(
+        "--rpm", type=int, default=0, help="Rate limit per-minute across micro jobs (0=off)"
+    )
 
     # POC sampling + CSV
-    p.add_argument("--limit-detections", type=int, default=0, help="If >0, cap detections to this many after sampling")
-    p.add_argument("--sample-step", type=int, default=0, help="If >0, keep every Nth detection (stratified sample)")
+    p.add_argument(
+        "--limit-detections",
+        type=int,
+        default=0,
+        help="If >0, cap detections to this many after sampling",
+    )
+    p.add_argument(
+        "--sample-step",
+        type=int,
+        default=0,
+        help="If >0, keep every Nth detection (stratified sample)",
+    )
     p.add_argument("--export-evidence-csv", action="store_true")
 
     a = p.parse_args()
@@ -213,43 +255,75 @@ def parse_args() -> AppConfig:
         final_model = "gpt-5"
 
     return AppConfig(
-        evtx_root=a.evtx_root, scope=a.scope, prefer=prefer,
-        rules=a.rules, mapping=a.mapping, sigma_root=a.sigma_root, outdir=a.outdir,
-        two_pass=a.two_pass, make_html=a.make_html, make_pdf=a.make_pdf,
-        toc=(a.toc == "on"), branding=(a.branding == "on"), fast=a.fast,
-        stream=(a.stream == "on"), integrity=(a.integrity == "on"), run_tests=a.run_tests,
-        chunk_model=chunk_model, final_model=final_model,
-        llm_timeout=a.llm_timeout, llm_retries=a.llm_retries, temperature=a.temperature,
+        evtx_root=a.evtx_root,
+        scope=a.scope,
+        prefer=prefer,
+        rules=a.rules,
+        mapping=a.mapping,
+        sigma_root=a.sigma_root,
+        outdir=a.outdir,
+        two_pass=a.two_pass,
+        make_html=a.make_html,
+        make_pdf=a.make_pdf,
+        toc=(a.toc == "on"),
+        branding=(a.branding == "on"),
+        fast=a.fast,
+        stream=(a.stream == "on"),
+        integrity=(a.integrity == "on"),
+        run_tests=a.run_tests,
+        chunk_model=chunk_model,
+        final_model=final_model,
+        llm_timeout=a.llm_timeout,
+        llm_retries=a.llm_retries,
+        temperature=a.temperature,
         max_input_tokens=max(4000, a.max_input_tokens),
-        chunk_size=max(1, a.chunk_size), max_chunks=max(1, a.max_chunks),
-        micro_workers=workers, rpm=max(0, a.rpm),
+        chunk_size=max(1, a.chunk_size),
+        max_chunks=max(1, a.max_chunks),
+        micro_workers=workers,
+        rpm=max(0, a.rpm),
         limit_detections=max(0, a.limit_detections),
         sample_step=max(0, a.sample_step),
         export_evidence_csv=a.export_evidence_csv,
     )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Console helpers
 # ─────────────────────────────────────────────────────────────────────────────
-def ok(msg: str):   console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
-def info(msg: str): console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
-def warn(msg: str): console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
+def ok(msg: str):
+    console.print(Panel.fit(f"[green]✔ {msg}[/green]", box=box.ROUNDED))
+
+
+def info(msg: str):
+    console.print(Panel.fit(f"[yellow]⚙ {msg}[/yellow]", box=box.ROUNDED))
+
+
+def warn(msg: str):
+    console.print(Panel.fit(f"[yellow]⚠ {msg}[/yellow]", box=box.ROUNDED))
+
+
 def die(msg: str):
     console.print(Panel.fit(f"[red]✘ {msg}[/red]", box=box.ROUNDED))
     sys.exit(1)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chainsaw integration
 # ─────────────────────────────────────────────────────────────────────────────
 def latest_container(root: Path) -> Path:
-    if not root.exists(): die(f"EVTX root not found: {root}")
+    if not root.exists():
+        die(f"EVTX root not found: {root}")
     dirs = [p for p in root.iterdir() if p.is_dir()]
-    if not dirs: die(f"No subfolders under {root}")
+    if not dirs:
+        die(f"No subfolders under {root}")
     return max(dirs, key=lambda p: p.stat().st_mtime)
+
 
 def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]:
     folder = latest_container(root)
-    console.print(Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED))
+    console.print(
+        Panel.fit(f"[cyan]✔ Using latest EVTX directory:[/cyan] {folder}", box=box.ROUNDED)
+    )
     if scope == "dir":
         return "dir", folder
     for name in prefer:
@@ -263,13 +337,18 @@ def select_source(root: Path, scope: str, prefer: List[str]) -> Tuple[str, Path]
         return "file", any_evtx[0]
     die("No .evtx files found in latest directory")
 
+
 def ensure_chainsaw():
     if shutil.which("chainsaw") is None:
         die("chainsaw not found in PATH")
 
+
 def ensure_paths(rules: Path, mapping: Path):
-    if not rules.exists():  die(f"Sigma rules path not found: {rules}")
-    if not mapping.exists(): die(f"Chainsaw mapping not found: {mapping}")
+    if not rules.exists():
+        die(f"Sigma rules path not found: {rules}")
+    if not mapping.exists():
+        die(f"Chainsaw mapping not found: {mapping}")
+
 
 def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path) -> Path:
     info("Running Chainsaw hunt…")
@@ -279,13 +358,22 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
 
     sigma_root = str((rules.parent if rules.name.lower() == "rules" else rules).resolve())
     cmd = [
-        "chainsaw", "hunt", str(src),
-        "--mapping", str(mapping),
-        "--rule", str(rules),
-        "-s", sigma_root,
-        "--json", "--output", str(out_path)
+        "chainsaw",
+        "hunt",
+        str(src),
+        "--mapping",
+        str(mapping),
+        "--rule",
+        str(rules),
+        "-s",
+        sigma_root,
+        "--json",
+        "--output",
+        str(out_path),
     ]
-    with Progress(SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(), TextColumn("[bold]Hunting[/bold]"), BarColumn(), TimeElapsedColumn()
+    ) as prog:
         task = prog.add_task("hunt", total=None)
         try:
             subprocess.run(cmd, check=True)
@@ -296,11 +384,13 @@ def run_chainsaw(kind: str, src: Path, rules: Path, mapping: Path, outdir: Path)
     ok("Chainsaw hunt completed. Parsing detections…")
     return out_path
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Load detections
 # ─────────────────────────────────────────────────────────────────────────────
 def load_detections(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists(): die(f"Detections file not found: {path}")
+    if not path.exists():
+        die(f"Detections file not found: {path}")
     text = path.read_text(encoding="utf-8", errors="ignore")
     try:
         data = json.loads(text)
@@ -309,8 +399,10 @@ def load_detections(path: Path) -> List[Dict[str, Any]]:
         for ln in text.splitlines():
             ln = ln.strip()
             if ln:
-                try: data.append(json.loads(ln))
-                except json.JSONDecodeError: pass
+                try:
+                    data.append(json.loads(ln))
+                except json.JSONDecodeError:
+                    pass
     if isinstance(data, dict) and "detections" in data:
         detections = data["detections"]
     elif isinstance(data, list):
@@ -318,6 +410,7 @@ def load_detections(path: Path) -> List[Dict[str, Any]]:
     else:
         die("Unexpected detections JSON shape")
     return detections
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Token estimation
@@ -331,20 +424,27 @@ def est_tokens(s: str, model_hint: str = "gpt-4o") -> int:
         return len(enc.encode(s))
     return max(1, math.ceil(len(s) / 4))
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Scoring (smarter selection)
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_event_id(det: Dict[str, Any]) -> str:
     try:
-        return str((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", ""))
+        return str(
+            (((det.get("document") or {}).get("data") or {}).get("Event") or {})
+            .get("System", {})
+            .get("EventID", "")
+        )
     except Exception:
         return ""
+
 
 def _extract_tags(det: Dict[str, Any]) -> List[str]:
     tags = det.get("tags", []) or []
     if isinstance(tags, str):
         tags = [tags]
     return [t.lower() for t in tags]
+
 
 def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     rule = det.get("name") or (det.get("rule", {}) or {}).get("title") or ""
@@ -364,19 +464,23 @@ def score_detection(det: Dict[str, Any], rule_freq: Dict[str, int]) -> float:
     freq = rule_freq.get(rule, 1)
     rarity = 1.0 + min(0.8, 1.0 / math.sqrt(freq))
 
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get("ScriptBlockText", "")
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
     script_bonus = 1.0 + min(0.5, len(script) / 2000.0)
 
     return 1.0 * mitre_bonus * sev * eid_w * rarity * script_bonus
+
 
 def score_micro_block(block: List[Dict[str, Any]], rule_freq: Dict[str, int]) -> float:
     if not block:
         return 0.0
     scores = sorted((score_detection(d, rule_freq) for d in block), reverse=True)
-    base = sum(scores[:min(5, len(scores))])
+    base = sum(scores[: min(5, len(scores))])
     uniq_rules = len({d.get("name") or (d.get("rule", {}) or {}).get("title") for d in block})
     diversity = 1.0 + min(0.5, (uniq_rules / max(1, len(block))) * 0.5)
     return base * diversity
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt builders
@@ -386,11 +490,19 @@ def fmt_micro_line(det: Dict[str, Any], include_snip: bool = True, snip_len: int
     rule = det.get("name", (det.get("rule", {}) or {}).get("title", "N/A"))
     tags = ", ".join(_extract_tags(det)) or "None"
     eid = _extract_event_id(det) or "N/A"
-    script = ((((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get("ScriptBlockText", "")
-    snip = (script[:snip_len] + ("…" if len(script) > snip_len else "")) if (include_snip and script) else ""
+    script = (
+        (((det.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}
+    ).get("ScriptBlockText", "")
+    snip = (
+        (script[:snip_len] + ("…" if len(script) > snip_len else ""))
+        if (include_snip and script)
+        else ""
+    )
     line = f"- [{ts}] {rule} (EventID {eid}; Tags: {tags})"
-    if snip: line += f" | snippet: {snip}"
+    if snip:
+        line += f" | snippet: {snip}"
     return line
+
 
 def build_micro_prompt(block: List[Dict[str, Any]]) -> str:
     hdr = (
@@ -402,6 +514,7 @@ def build_micro_prompt(block: List[Dict[str, Any]]) -> str:
     body = "\n".join(fmt_micro_line(d) for d in block)
     return hdr + "\n" + body
 
+
 def build_final_prompt(micros: List[str]) -> str:
     hdr = (
         "Merge the following micro-summaries into one executive DFIR report. "
@@ -410,18 +523,30 @@ def build_final_prompt(micros: List[str]) -> str:
     )
     return hdr + "\n\n" + "\n\n---\n\n".join(micros)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM call (accurate billing)
 # ─────────────────────────────────────────────────────────────────────────────
 def backoff_sleep(i: int):
-    time.sleep(min(30.0, (1.6 ** i) + random.uniform(0, 0.25)))
+    time.sleep(min(30.0, (1.6**i) + random.uniform(0, 0.25)))
 
-def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
-             temperature: float, timeout_s: int, retries: int, stream: bool = False) -> Tuple[str, int, int]:
+
+def call_llm(
+    client: OpenAI,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    timeout_s: int,
+    retries: int,
+    stream: bool = False,
+) -> Tuple[str, int, int]:
     if stream:
         stream = False  # accurate billing requires usage fields
 
-    send_temp = None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    send_temp = (
+        None if abs(temperature - 1.0) < 1e-6 or model.startswith("gpt-5") else float(temperature)
+    )
     last_err = None
     for i in range(retries):
         try:
@@ -455,6 +580,7 @@ def call_llm(client: OpenAI, model: str, system_prompt: str, user_prompt: str,
             continue
     raise RuntimeError(f"LLM retries exceeded: {last_err}")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Chunking / sampling
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,7 +588,10 @@ def chunk(lst: List[Any], size: int) -> Iterable[List[Any]]:
     for i in range(0, len(lst), size):
         yield lst[i : i + size]
 
-def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int) -> List[List[Dict[str, Any]]]:
+
+def dynamic_chunks(
+    dets: List[Dict[str, Any]], base_size: int, max_input_tokens: int
+) -> List[List[Dict[str, Any]]]:
     size = max(1, base_size)
     while True:
         blocks = list(chunk(dets, size))
@@ -476,6 +605,7 @@ def dynamic_chunks(dets: List[Dict[str, Any]], base_size: int, max_input_tokens:
             return blocks
         size = max(1, size - 2)
 
+
 def apply_sampling(dets: List[Dict[str, Any]], limit: int, step: int) -> List[Dict[str, Any]]:
     if step > 1:
         # take every Nth to stratify
@@ -484,14 +614,18 @@ def apply_sampling(dets: List[Dict[str, Any]], limit: int, step: int) -> List[Di
         dets = dets[:limit]
     return dets
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Micro parallel + selection
 # ─────────────────────────────────────────────────────────────────────────────
-def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppConfig) -> Tuple[List[str], Tuple[int,int]]:
+def micro_parallel(
+    client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppConfig
+) -> Tuple[List[str], Tuple[int, int]]:
     usage_in = usage_out = 0
     micros: List[str] = [""] * len(blocks)
 
     import threading
+
     last_call = [0.0]
     lock = threading.Lock()
 
@@ -508,24 +642,39 @@ def micro_parallel(client: OpenAI, blocks: List[List[Dict[str, Any]]], cfg: AppC
         user = build_micro_prompt(b)
         throttle()
         out, ptk, ctk = call_llm(
-            client, cfg.chunk_model, SYSTEM_MICRO, user,
-            cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+            client,
+            cfg.chunk_model,
+            SYSTEM_MICRO,
+            user,
+            cfg.temperature,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            stream=False,
         )
         return i, out, ptk, ctk
 
-    with Progress(SpinnerColumn(), TextColumn("[bold]Micro[/bold]"), BarColumn(), TextColumn("[progress.completed]/[progress.total]"), TimeElapsedColumn()) as prog:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Micro[/bold]"),
+        BarColumn(),
+        TextColumn("[progress.completed]/[progress.total]"),
+        TimeElapsedColumn(),
+    ) as prog:
         task = prog.add_task("micro", total=len(blocks))
         with ThreadPoolExecutor(max_workers=cfg.micro_workers) as ex:
             futs = [ex.submit(work, i, b) for i, b in enumerate(blocks)]
             for f in as_completed(futs):
                 i, out, ptk, ctk = f.result()
-                micros[i] = f"## Micro {i+1}: Cluster Summary\n\n" + out
+                micros[i] = f"## Micro {i + 1}: Cluster Summary\n\n" + out
                 usage_in += ptk
                 usage_out += ctk
                 prog.update(task, advance=1)
     return micros, (usage_in, usage_out)
 
-def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int, cap_count: int = 20) -> List[str]:
+
+def select_best_micros(
+    blocks: List[List[Dict[str, Any]]], micros: List[str], max_tokens: int, cap_count: int = 20
+) -> List[str]:
     # Rule frequency for rarity/diversity scoring
     rule_freq: Dict[str, int] = {}
     for b in blocks:
@@ -552,6 +701,7 @@ def select_best_micros(blocks: List[List[Dict[str, Any]]], micros: List[str], ma
         selected = [micros[0][: allowed * 4]]
     return selected
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Visual helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -559,26 +709,35 @@ def build_heatmap_counts(dets: List[Dict[str, Any]]) -> List[int]:
     buckets = [0] * 24
     for d in dets:
         ts = d.get("timestamp")
-        if not ts: continue
+        if not ts:
+            continue
         try:
-            dt = datetime.fromisoformat(ts.replace("Z","+00:00") if ts.endswith("Z") else ts)
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00") if ts.endswith("Z") else ts)
             hr = dt.astimezone(timezone.utc).hour
             buckets[hr] += 1
         except Exception:
             continue
     return buckets
 
+
 def compute_eventid_counts(dets: List[Dict[str, Any]]) -> Dict[str, int]:
     out: Dict[str, int] = {}
+
     def _eid(d):
         try:
-            return str((((d.get("document") or {}).get("data") or {}).get("Event") or {}).get("System", {}).get("EventID", ""))
+            return str(
+                (((d.get("document") or {}).get("data") or {}).get("Event") or {})
+                .get("System", {})
+                .get("EventID", "")
+            )
         except Exception:
             return ""
+
     for d in dets:
         e = _eid(d) or "?"
         out[e] = out.get(e, 0) + 1
     return out
+
 
 _PHASE_KEYS = {
     "execution": "Execution",
@@ -591,13 +750,15 @@ _PHASE_KEYS = {
     "c2": "Command & Control",
 }
 
+
 def compute_phase_counts(dets: List[Dict[str, Any]]) -> Dict[str, int]:
     out = {v: 0 for v in _PHASE_KEYS.values()}
     out["Unmapped/Multiple"] = 0
 
     def _tags(d):
         t = d.get("tags", []) or []
-        if isinstance(t, str): t = [t]
+        if isinstance(t, str):
+            t = [t]
         return [x.lower() for x in t]
 
     def _name(d):
@@ -616,19 +777,21 @@ def compute_phase_counts(dets: List[Dict[str, Any]]) -> Dict[str, int]:
             out[hits.pop()] += 1
     return out
 
+
 def counts_by_day(dets: List[Dict[str, Any]]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for d in dets:
         ts = d.get("timestamp")
-        if not ts: 
+        if not ts:
             continue
         try:
-            dt = datetime.fromisoformat(ts.replace("Z","+00:00") if ts.endswith("Z") else ts)
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00") if ts.endswith("Z") else ts)
             key = dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
             out[key] = out.get(key, 0) + 1
         except Exception:
             continue
     return out
+
 
 # Inline CSS (base + polish addendum)
 INLINE_CSS = f"""
@@ -745,6 +908,7 @@ function renderDonut(canvasId, data, colors) {
 }
 """
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML builder + billing injector
 # ─────────────────────────────────────────────────────────────────────────────
@@ -754,46 +918,67 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
     phase_counts = compute_phase_counts(dets)
     day_counts = counts_by_day(dets)
 
-    def topn_items(d: Dict[str,int], n=8):
+    def topn_items(d: Dict[str, int], n=8):
         return sorted(d.items(), key=lambda x: x[1], reverse=True)[:n]
 
     donut_colors = [
-        "#0a69ff","#154cbd","#1e3d8a","#27405e","#5a7bd7","#98b3ff",
-        "#3a9ad9","#7bc8f6","#6aabd2","#3e6bb8"
+        "#0a69ff",
+        "#154cbd",
+        "#1e3d8a",
+        "#27405e",
+        "#5a7bd7",
+        "#98b3ff",
+        "#3a9ad9",
+        "#7bc8f6",
+        "#6aabd2",
+        "#3e6bb8",
     ]
 
     body_html = _html.escape(md_final)
 
-    eid_foot = ("EventID 1 = Sysmon Process Create; 13 = Registry value write; "
-                "4104 = PowerShell ScriptBlock; 4688 = Process Creation (Security).")
+    eid_foot = (
+        "EventID 1 = Sysmon Process Create; 13 = Registry value write; "
+        "4104 = PowerShell ScriptBlock; 4688 = Process Creation (Security)."
+    )
     heat_caption = "Activity by hour (UTC). Hover cells for exact counts."
 
     css = INLINE_CSS + INLINE_CSS_POLISH
 
     def legend_html(items):
         rows = []
-        for idx,(k,v) in enumerate(items):
+        for idx, (k, v) in enumerate(items):
             sw = f'<span class="swatch" style="background:{donut_colors[idx % len(donut_colors)]}"></span>'
-            rows.append(f'<div class="row">{sw}<span>{_html.escape(str(k))}: <strong>{v}</strong></span></div>')
-        return '<div class="legend">' + "".join(rows) + '</div>'
+            rows.append(
+                f'<div class="row">{sw}<span>{_html.escape(str(k))}: <strong>{v}</strong></span></div>'
+            )
+        return '<div class="legend">' + "".join(rows) + "</div>"
 
     import json as _json
+
     js_phase = _json.dumps(phase_counts)
-    js_eid   = _json.dumps(dict(topn_items(eid_counts, n=8)))
-    js_day   = _json.dumps(day_counts)
-    js_counts= _json.dumps(counts_24)
-    js_colors= _json.dumps(donut_colors)
+    js_eid = _json.dumps(dict(topn_items(eid_counts, n=8)))
+    js_day = _json.dumps(day_counts)
+    js_counts = _json.dumps(counts_24)
+    js_colors = _json.dumps(donut_colors)
 
     toc_html = (
-        '<div class="toc"><strong>Contents</strong><ul>'
-        '<li><a href="#kpis">Key Metrics</a></li>'
-        '<li><a href="#heat">Detection Heatmap</a></li>'
-        '<li><a href="#viz">At a Glance</a></li>'
-        '<li><a href="#exec">Executive Report</a></li>'
-        '</ul></div>'
-    ) if cfg.toc else ""
+        (
+            '<div class="toc"><strong>Contents</strong><ul>'
+            '<li><a href="#kpis">Key Metrics</a></li>'
+            '<li><a href="#heat">Detection Heatmap</a></li>'
+            '<li><a href="#viz">At a Glance</a></li>'
+            '<li><a href="#exec">Executive Report</a></li>'
+            "</ul></div>"
+        )
+        if cfg.toc
+        else ""
+    )
 
-    branding = '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>' if cfg.branding else '<div></div>'
+    branding = (
+        '<div class="brand">Powered by <strong>ForenSynth AI\u2122</strong></div>'
+        if cfg.branding
+        else "<div></div>"
+    )
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -805,7 +990,7 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
 <body>
   <div class="header">
     <div class="h1">ForenSynth AI — DFIR Report</div>
-    <div class="sub">Generated {datetime.now(timezone.utc).isoformat()} | Integrity Mode: {'ON' if cfg.integrity else 'OFF'}</div>
+    <div class="sub">Generated {datetime.now(timezone.utc).isoformat()} | Integrity Mode: {"ON" if cfg.integrity else "OFF"}</div>
     <div class="strip"></div>
   </div>
   <div class="container">
@@ -814,7 +999,7 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
       <div class="kpi"><div class="label">Detections</div><div class="value">{len(dets)}</div></div>
       <div class="kpi"><div class="label">Chunk Model</div><div class="value">{_html.escape(cfg.chunk_model)}</div></div>
       <div class="kpi"><div class="label">Final Model</div><div class="value">{_html.escape(cfg.final_model)}</div></div>
-      <div class="kpi"><div class="label">Two-Pass</div><div class="value">{'Yes' if cfg.two_pass else 'No'}</div></div>
+      <div class="kpi"><div class="label">Two-Pass</div><div class="value">{"Yes" if cfg.two_pass else "No"}</div></div>
     </div>
 
     <div id="heat" class="section">
@@ -875,12 +1060,15 @@ def build_html(md_final: str, dets: List[Dict[str, Any]], cfg: AppConfig, outnam
 """
     return html
 
+
 def append_billing_to_html(html_path: Path, lines: List[str]):
     try:
         html = html_path.read_text(encoding="utf-8", errors="ignore")
-        billing = "<div class=\"section\"><h2>Billing Summary</h2><ul>" + "".join(
-            f"<li>{_html.escape(ln)}</li>" for ln in lines
-        ) + "</ul><div class=\"note\">Based on OpenAI usage tokens (prompt/completion) reported by API.</div></div>"
+        billing = (
+            '<div class="section"><h2>Billing Summary</h2><ul>'
+            + "".join(f"<li>{_html.escape(ln)}</li>" for ln in lines)
+            + '</ul><div class="note">Based on OpenAI usage tokens (prompt/completion) reported by API.</div></div>'
+        )
         if "</div>\n</div>\n<script" in html:
             html = html.replace("</div>\n</div>\n<script", billing + "\n</div>\n</div>\n<script", 1)
         else:
@@ -889,18 +1077,22 @@ def append_billing_to_html(html_path: Path, lines: List[str]):
     except Exception as e:
         info(f"Failed to append billing to HTML: {e}")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cost & Logging & CSV
 # ─────────────────────────────────────────────────────────────────────────────
-def cost_breakdown(usage: Dict[str, Tuple[int,int]]) -> Tuple[float, List[str]]:
+def cost_breakdown(usage: Dict[str, Tuple[int, int]]) -> Tuple[float, List[str]]:
     total = 0.0
     lines: List[str] = []
     for m, (ti, to) in usage.items():
-        p = PRICING.get(m, {"in":0.0, "out":0.0})
-        c = (ti/1000.0)*p["in"] + (to/1000.0)*p["out"]
+        p = PRICING.get(m, {"in": 0.0, "out": 0.0})
+        c = (ti / 1000.0) * p["in"] + (to / 1000.0) * p["out"]
         total += c
-        lines.append(f"{m}: prompt={ti} tok, completion={to} tok → ${c:.6f} (in {p['in']}/k, out {p['out']}/k)")
-    return round(total,6), lines
+        lines.append(
+            f"{m}: prompt={ti} tok, completion={to} tok → ${c:.6f} (in {p['in']}/k, out {p['out']}/k)"
+        )
+    return round(total, 6), lines
+
 
 def write_run_log(csv_path: Path, row: Dict[str, Any]):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -909,68 +1101,120 @@ def write_run_log(csv_path: Path, row: Dict[str, Any]):
         with csv_path.open("r", newline="", encoding="utf-8") as f:
             rows.extend(csv.DictReader(f))
     rows.append(row)
-    rows.sort(key=lambda r: r.get("timestamp",""), reverse=True)
+    rows.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["timestamp","detections","runtime_sec","cost_usd","integrity","chunk_model","final_model"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "timestamp",
+                "detections",
+                "runtime_sec",
+                "cost_usd",
+                "integrity",
+                "chunk_model",
+                "final_model",
+            ],
+        )
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
 
     tbl = Table(title="Recent ForenSynth Runs (latest 5)", box=box.SIMPLE_HEAVY)
-    for h in ["timestamp","detections","runtime_sec","cost_usd","integrity","chunk_model","final_model"]:
+    for h in [
+        "timestamp",
+        "detections",
+        "runtime_sec",
+        "cost_usd",
+        "integrity",
+        "chunk_model",
+        "final_model",
+    ]:
         tbl.add_column(h)
     for r in rows[:5]:
-        tbl.add_row(r.get("timestamp",""), str(r.get("detections","")), str(r.get("runtime_sec","")),
-                    str(r.get("cost_usd","")), r.get("integrity",""), r.get("chunk_model",""), r.get("final_model",""))
+        tbl.add_row(
+            r.get("timestamp", ""),
+            str(r.get("detections", "")),
+            str(r.get("runtime_sec", "")),
+            str(r.get("cost_usd", "")),
+            r.get("integrity", ""),
+            r.get("chunk_model", ""),
+            r.get("final_model", ""),
+        )
     console.print(tbl)
+
 
 def export_evidence_csv(evidence_path: Path, dets: List[Dict[str, Any]]):
     try:
         with evidence_path.open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["timestamp","rule","event_id","tags","snippet"])
+            w.writerow(["timestamp", "rule", "event_id", "tags", "snippet"])
             for d in dets:
-                ts = d.get("timestamp","")
-                rule = d.get("name") or (d.get("rule",{}) or {}).get("title","")
+                ts = d.get("timestamp", "")
+                rule = d.get("name") or (d.get("rule", {}) or {}).get("title", "")
                 eid = _extract_event_id(d)
                 tags = ";".join(_extract_tags(d))
-                script = ((((d.get("document") or {}).get("data") or {}).get("Event") or {}).get("EventData") or {}).get("ScriptBlockText","")
+                script = (
+                    (((d.get("document") or {}).get("data") or {}).get("Event") or {}).get(
+                        "EventData"
+                    )
+                    or {}
+                ).get("ScriptBlockText", "")
                 snip = (script[:160] + ("…" if len(script) > 160 else "")) if script else ""
                 w.writerow([ts, rule, eid, tags, snip])
         ok(f"Evidence CSV written: {evidence_path}")
     except Exception as e:
         warn(f"Evidence CSV write failed: {e}")
 
+
 def archive_old_reports(base_dir: Path, keep_day: str):
-    archive_dir = base_dir/"archive"/keep_day
+    archive_dir = base_dir / "archive" / keep_day
     archive_dir.mkdir(parents=True, exist_ok=True)
     for p in list(base_dir.iterdir()):
-        if p.name == "archive": continue
+        if p.name == "archive":
+            continue
         if p.is_dir() and p.name.startswith(keep_day):
             continue
         if p.is_dir():
-            shutil.move(str(p), archive_dir/p.name)
-        elif p.is_file() and (p.suffix in {".html",".md",".pdf"}):
-            shutil.move(str(p), archive_dir/p.name)
+            shutil.move(str(p), archive_dir / p.name)
+        elif p.is_file() and (p.suffix in {".html", ".md", ".pdf"}):
+            shutil.move(str(p), archive_dir / p.name)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Two-pass pipeline
 # ─────────────────────────────────────────────────────────────────────────────
-def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tuple[str, Dict[str, Tuple[int,int]]]:
+def two_pass(
+    client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig
+) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     blocks = dynamic_chunks(dets, cfg.chunk_size, cfg.max_input_tokens)
     if not blocks:
         return "# No detections — nothing to summarize.", {}
 
-    console.print(Panel.fit(f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]", box=box.ROUNDED))
+    console.print(
+        Panel.fit(
+            f"[yellow]⚙ Detections found ({len(dets)}) — generating micro-summaries…[/yellow]",
+            box=box.ROUNDED,
+        )
+    )
     micros, (mi_in, mi_out) = micro_parallel(client, blocks, cfg)
 
-    console.print(Panel.fit(f"[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED))
+    console.print(
+        Panel.fit(
+            "[yellow]⚙ Compiling executive summary with final model…[/yellow]", box=box.ROUNDED
+        )
+    )
     selected = select_best_micros(blocks, micros, cfg.max_input_tokens, cap_count=20)
     final_user = build_final_prompt(selected)
 
     final_text, f_ptk, f_ctk = call_llm(
-        client, cfg.final_model, SYSTEM_FINAL, final_user,
-        cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False
+        client,
+        cfg.final_model,
+        SYSTEM_FINAL,
+        final_user,
+        cfg.temperature,
+        cfg.llm_timeout,
+        cfg.llm_retries,
+        stream=False,
     )
 
     usage = {
@@ -989,6 +1233,7 @@ def two_pass(client: OpenAI, dets: List[Dict[str, Any]], cfg: AppConfig) -> Tupl
     appendix = "\n\n---\n\n## Micro Cluster Summaries\n\n" + "\n\n".join(micros)
     return header + final_text + appendix, usage
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1000,7 +1245,9 @@ def main():
         die("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
 
-    console.rule("[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.4 (Polish)[/bold cyan]")
+    console.rule(
+        "[bold cyan]🧠 ForenSynth AI — DFIR Intelligence Engine v2.3.4 (Polish)[/bold cyan]"
+    )
 
     start = time.time()
 
@@ -1022,7 +1269,12 @@ def main():
     # Sampling (for POC speed)
     dets = apply_sampling(dets_full, cfg.limit_detections, cfg.sample_step)
     if len(dets) != original_count:
-        console.print(Panel.fit(f"[cyan]⚙ Sampling applied: {original_count} → {len(dets)} (step={cfg.sample_step or 1}, limit={cfg.limit_detections or '∞'})[/cyan]", box=box.ROUNDED))
+        console.print(
+            Panel.fit(
+                f"[cyan]⚙ Sampling applied: {original_count} → {len(dets)} (step={cfg.sample_step or 1}, limit={cfg.limit_detections or '∞'})[/cyan]",
+                box=box.ROUNDED,
+            )
+        )
 
     # Write normalized evidence JSON (what the rest of pipeline uses)
     evidence_json_path = outdir / "evidence.json"
@@ -1039,16 +1291,19 @@ def main():
             html_path = outdir / f"forensynth_report_{stamp.split('_')[0]}.html"
             html_path.write_text(html, encoding="utf-8")
             ok(f"Report written: {html_path}")
-        write_run_log(cfg.outdir/"run_log.csv", {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "detections": 0,
-            "runtime_sec": int(time.time()-start),
-            "cost_usd": f"{0.0:.6f}",
-            "integrity": "on" if cfg.integrity else "off",
-            "chunk_model": cfg.chunk_model,
-            "final_model": cfg.final_model,
-        })
-        archive_old_reports(cfg.outdir, keep_day=stamp.split('_')[0])
+        write_run_log(
+            cfg.outdir / "run_log.csv",
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "detections": 0,
+                "runtime_sec": int(time.time() - start),
+                "cost_usd": f"{0.0:.6f}",
+                "integrity": "on" if cfg.integrity else "off",
+                "chunk_model": cfg.chunk_model,
+                "final_model": cfg.final_model,
+            },
+        )
+        archive_old_reports(cfg.outdir, keep_day=stamp.split("_")[0])
         return
 
     # Summarize (two-pass default when flag present)
@@ -1062,9 +1317,19 @@ def main():
         base_in = est_tokens(SYSTEM_FINAL)
         while base_in + est_tokens(user) > cfg.max_input_tokens:
             parts = user.splitlines()
-            if len(parts) <= 10: break
+            if len(parts) <= 10:
+                break
             user = "\n".join(parts[:-10])
-        md_body, ptk, ctk = call_llm(client, cfg.final_model, SYSTEM_FINAL, user, cfg.temperature, cfg.llm_timeout, cfg.llm_retries, stream=False)
+        md_body, ptk, ctk = call_llm(
+            client,
+            cfg.final_model,
+            SYSTEM_FINAL,
+            user,
+            cfg.temperature,
+            cfg.llm_timeout,
+            cfg.llm_retries,
+            stream=False,
+        )
         usage = {cfg.final_model: (base_in + ptk, ctk)}
         md_final = (
             "# 🔍 ForenSynth AI — DFIR Summary (Single-Pass)\n\n"
@@ -1098,33 +1363,40 @@ def main():
     runtime = int(time.time() - start)
     total_cost, lines = cost_breakdown(usage)
 
-    write_run_log(cfg.outdir/"run_log.csv", {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "detections": original_count,  # show original for transparency; visuals reflect sampled set inside HTML
-        "runtime_sec": runtime,
-        "cost_usd": f"{total_cost:.6f}",
-        "integrity": "on" if cfg.integrity else "off",
-        "chunk_model": cfg.chunk_model,
-        "final_model": cfg.final_model,
-    })
+    write_run_log(
+        cfg.outdir / "run_log.csv",
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "detections": original_count,  # show original for transparency; visuals reflect sampled set inside HTML
+            "runtime_sec": runtime,
+            "cost_usd": f"{total_cost:.6f}",
+            "integrity": "on" if cfg.integrity else "off",
+            "chunk_model": cfg.chunk_model,
+            "final_model": cfg.final_model,
+        },
+    )
 
     # Append billing to HTML for parity with dashboard
     if html_path is not None:
         append_billing_to_html(html_path, lines)
 
     console.rule("[bold]Cost Breakdown[/bold]")
-    for ln in lines: console.print(ln)
+    for ln in lines:
+        console.print(ln)
     console.print(f"Total cost: ${total_cost:.6f}")
 
-    console.print(Panel.fit(
-        f"[white on dodger_blue2]  Runtime Summary  [/white on dodger_blue2]\n"
-        f"Processed {original_count} detections in {runtime}s | Output: {md_path.name}"
-        + (f" | HTML: {html_path.name}" if html_path else ""),
-        box=box.ROUNDED
-    ))
+    console.print(
+        Panel.fit(
+            f"[white on dodger_blue2]  Runtime Summary  [/white on dodger_blue2]\n"
+            f"Processed {original_count} detections in {runtime}s | Output: {md_path.name}"
+            + (f" | HTML: {html_path.name}" if html_path else ""),
+            box=box.ROUNDED,
+        )
+    )
 
     # Archive prior day reports to keep today's tidy
-    archive_old_reports(cfg.outdir, keep_day=stamp.split('_')[0])
+    archive_old_reports(cfg.outdir, keep_day=stamp.split("_")[0])
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
