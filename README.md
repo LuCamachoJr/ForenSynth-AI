@@ -1,194 +1,224 @@
-# ForenSynth AI
+# ForenSynth AI — DFIR Report Synthesizer
 
-Evidence-forward DFIR reporting engine. This repo reconstructs history from early Chainsaw summarizer (v1.0) to **v2.3.3 Visual** with clean commits, tags, and minimal examples.
+ForenSynth AI is a DFIR-focused log summarization engine that ingests **Chainsaw/Sigma detections**, groups them, and produces:
 
-## Versions (tags)
-- v1.0.0 — Chainsaw Summarizer (static and 3.5 variants)
-- v2.0.0 — First “ForenSynth AI” (two-pass)
-- v2.1.0 — Resilience & retries
-- v2.2.0 — Dev stream: Integrity Mode + heatmap HTML
-- v2.3.2 — Max Fidelity (deterministic two-pass, Evidence Snapshot)
-- v2.3.3 — Visual report release
+- Executive summary mapped to **MITRE ATT&CK**
+- Micro-cluster summaries
+- HTML visual report (heatmap + MITRE-phase donuts)
+- CSV evidence appendix
+- Actual OpenAI usage & cost summary
+- Integrity metadata, timelines, and breakdowns
 
 ---
 
-## Quickstart (v2.3.3 Visual)
+# Versions (tags)
 
-### Prereqs
-- Python 3.11+
-- Install deps: `pip install -r requirements.txt`
+- **v1.0.0** — Chainsaw Summarizer (static + 3.5)
+- **v2.0.0** — First “ForenSynth AI”
+- **v2.1.0** — Resilience & retries
+- **v2.2.0** — Dev-stream visuals (heatmap)
+- **v2.3.2** — Max Fidelity (deterministic two-pass)
+- **v2.3.3** — Visual Release (KPI cards + heatmap)
+- **v2.3.4** — **Polish: donuts + heatmap, sampling governor, CSV export, real cost calculations (current)**
 
-# Clone & setup
-    git clone https://github.com/LuCamachoJr/ForenSynth-AI.git
-    cd ForenSynth-AI
+---
+
+# Quickstart (v2.3.3 Visual)
+
+> v2.3.3 is kept as a “pure visuals” baseline.  
+> For the *latest* visuals + sampling + CSV, use **v2.3.4 Polish** (see below).
+
+## Setup
+
+Create a virtual environment and install dependencies:
+
     python -m venv venv
-    venv\Scripts\activate
+    venv\Scripts\activate  # Windows
     pip install -r requirements.txt
 
-# Run (adjust paths)
-    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py `
-      --input "E:\Cases\case01\detections\detections.json" `
-      --outdir "E:\Cases\case01\report" `
-      --integrity `
-      --html --pdf
+## Run (v2.3.3 Visual)
 
-### Outputs
-- `report.md` / `report.html` / (optional) `report.pdf`
-- `evidence_snapshot.json` and/or `evidence_snapshot.csv`
-- `meta.txt` — model, timestamp, and SHA256 (from `--integrity`)
+    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py ^
+      --input "E:\Case\detections.json" ^
+      --outdir "E:\Case\report" ^
+      --html ^
+      --integrity
 
-### See also
-- Lab Setup & Telemetry Guide (Sysmon → Chainsaw → Sigma)
-- ForenSynth v2.3.3 Quickstart (detections → narrative + visuals)
+### Outputs (v2.3.3)
 
----
-
-## CLI Usage (v2.3.3 Visual)
-
-# Show help
-    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py --help
-
-# Synopsis
-    forensynth_ai_v2_3_3_visual.py --input <detections.json> --outdir <folder> [options]
-
-# Required
-- `--input PATH` — Path to Chainsaw/Sigma detections JSON (UTF-8).
-- `--outdir DIR` — Output directory (created if missing).
-
-# Output controls
-- `--html` — Emit `report.html` (visual: KPI cards, heatmap).
-- `--pdf` — Emit `report.pdf` (requires a PDF engine).
-- `--integrity` — Write `meta.txt` with model, timestamp, SHA256.
-- `--title TEXT` — Override report title.
-- `--case-id TEXT` — Optional case identifier stamped in outputs.
-
-# Evidence / appendix
-- `--evidence-snapshot` — Write `evidence_snapshot.json` and `.csv` (hosts, users, rules, IOCs, counts).
-- `--appendix` — Include IOC/MITRE appendix in the report.
-- `--kpi` — Include KPI summary section.
-- `--heatmap` — Include detections-by-time heatmap.
-
-# Model / generation
-- `--model NAME` — LLM identifier (default: repo/model default).
-- `--max-batch INT` — Max detections per micro-summary batch (default: 200).
-- `--temperature FLOAT` — Sampling temperature (default: 0.2).
-- `--seed INT` — Deterministic seed (locks visual ordering/layout).
-
-# Performance / logging
-- `--workers INT` — Parallel worker count (default: auto).
-- `--log-level LEVEL` — `debug | info | warning | error` (default: `info`).
-- `--dry-run` — Parse inputs and print planned actions, then exit.
-- `-h, --help` — Show help and exit.
-
-## Examples
-
-### Minimal example (quick run)
-    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py `
-      --input "E:\Cases\case01\detections\detections.json" `
-      --outdir "E:\Cases\case01\report" `
-      --html --integrity
-
-### Advanced example (keep your existing one)
-    # Example
-    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py `
-      --input "E:\Cases\case01\detections\detections.json" `
-      --outdir "E:\Cases\case01\report" `
-      --html --pdf --integrity --evidence-snapshot --appendix --kpi --heatmap `
-      --model gpt-5-large --max-batch 200 --temperature 0.2 --seed 42 `
-      --title "Case 01 — ForenSynth Visual Report" --case-id CASE-2025-10-16
-
-### What you should see
-- report.html  → Visual report (KPI cards, heatmap, narrative)
-- report.md    → Markdown narrative with sections
-- evidence_snapshot.json / .csv → Hosts, users, rules, IOCs
-- meta.txt     → Model, timestamp, SHA256
+- HTML report
+- Markdown summary
+- Integrity meta
+- Evidence snapshot
 
 ---
 
-## Releases, Changelog, and Support
+# v2.3.4 Polish (current)
 
-### Status badges
-[![Lint](https://github.com/LuCamachoJr/ForenSynth-AI/actions/workflows/lint.yml/badge.svg)](https://github.com/LuCamachoJr/ForenSynth-AI/actions/workflows/lint.yml)
+`src/v2.3.4/forensynth_ai_v2_3_4_polish.py` is the newest iteration.
 
-### Releases (tagged history)
-- **v2.3.3** — Visual report (heatmap, KPI cards, IOC appendix)
-- **v2.3.2** — Max Fidelity (deterministic two-pass, Evidence Snapshot)
-- **v2.3.1** — Pre–max-fidelity polish and UX tweaks
-- **v2.1.0** — Resilience & retry stream; improved batching
-- **v2.0.0** — Two-pass pipeline (micro summaries → final)
-- **v1.4.0** — Rebrand to ForenSynth AI (single-pass)
-- **v1.3.1** — Fast profile v1: stability tweaks
-- **v1.3.0** — GPT-5 fast profile for throughput tests
-- **v1.2.0** — First GPT-5 integration
-- **v1.1.0** — GPT-3.5 variant; cleaner narrative sections
-- **v1.0.0** — Baseline Chainsaw summarizer (JSON → report)
+## What’s new in v2.3.4
 
-### Changelog
-See `CHANGELOG.md` for a one-line summary per version. Release notes on GitHub point back to these tags.
+**MITRE-mapped donut charts**
 
-### How to pick a version
-- **Stable visual report:** use `v2.3.3`.
-- **Max fidelity deterministic runs:** try `v2.3.2`.
-- **Historical lineage or comparisons:** check earlier tags under `src/<version>`.
+- Donuts by phase:
+  - Execution
+  - Persistence
+  - Discovery
+  - Lateral Movement
+  - Defense Evasion
+  - Unmapped / Multiple
 
-### Issue reporting / questions
-- Open an **Issue** with:
-  - OS + Python version
-  - ForenSynth tag (e.g., `v2.3.3`)
-  - Exact command and minimal input (or a redacted sample)
-  - Error output (copy/paste)
-- For feature requests, propose the **CLI flag** and expected behavior.
+**Heatmap polish**
 
-### License
-- Project license: see `LICENSE`.
-- Third-party content: preserved under `THIRD_PARTY_NOTICES`.
+- Caption under the heatmap
+- EventID footnote (e.g., 1 = Process Create, 13 = Registry, 4104 = ScriptBlock)
+- Consistent color palette with the donuts
+
+**Sampling Governor**
+
+Designed for **2k–3k detections** so you can still get a clean, readable report:
+
+- `--limit-detections N`  
+- `--sample-step N` (stratified sampling)
+
+Example:  
+2705 detections → step 3 → 902 summarized detections → much better runtime and cost.
+
+**CSV Evidence Appendix**
+
+`--export-evidence-csv` produces a CSV with:
+
+- Rule → count → ATT&CK phase
+- Entities (users, accounts, tasks, etc.)
+- Key timestamps
+
+This is meant as a pivot table for analysts.
+
+**Real OpenAI cost**
+
+- Uses real `response.usage` token counts instead of estimates
+- Cost section now matches the OpenAI dashboard for the run
+
+**Micro-cap governor**
+
+- Caps number of micro-summaries by both detection count and token budget
+- Keeps final merge latency + cost under control while preserving coverage
+
+**Meta improvements**
+
+- “Selected micros: X / Y blocks” shown in the report
+- EventID explanation footnote near the visuals
+- More readable legends
+- Cleaner HTML structure
+
+---
+
+# Running v2.3.4 Polish
+
+Typical usage on Windows:
+
+    python .\src\v2.3.4\forensynth_ai_v2_3_4_polish.py ^
+      --input "E:\Case\detections.json" ^
+      --outdir "E:\Case\polish-report" ^
+      --html ^
+      --integrity ^
+      --export-evidence-csv ^
+      --chart-style both ^
+      --limit-detections 1000 ^
+      --sample-step 3
+
+Outputs:
+
+- `forensynth_report_YYYY-MM-DD.html`
+- `forensynth_summary_YYYY-MM-DD.md`
+- `evidence.csv`
+- `meta.txt`
+- `detections.json` (input copy or reference)
 
 ---
 
-## Install
-- Python 3.11+
-- Create a venv and install deps:
-    python -m venv venv
-    venv\Scripts\activate
-    pip install -r requirements.txt
+# Sampling Notes (POC)
 
-## Contributing
-- Open an Issue first for major changes; describe the CLI flags or output you expect.
-- Code style: `ruff format .` then `ruff check . --fix`
-- Python: 3.11+ (no backslash escapes inside f-strings; keep py311-safe)
-- Commit messages: conventional style, e.g. `feat:`, `fix:`, `docs:`, `chore:`
-- PR checklist:
-  - [ ] Added/updated CLI help if new flags (`--help`)
-  - [ ] Updated README examples if behavior changed
-  - [ ] `ruff` passes locally
+Example production-style POC run:
+
+- Raw detections: **2705**
+- Sampling: `step=3`, `limit-detections=1000` → **902** used for micro summaries
+- Runtime: **~5 minutes** on a Kali VM
+- Cost: **~$0.07** (gpt-5-mini + gpt-5 combo)
+
+This makes it feasible to:
+
+- Run repeatedly on lab data
+- Show to hiring managers / mentors
+- Use in HTB/DFIR write-ups without breaking the bank
 
 ---
 
-## Optional: LLM provider deps
+# Examples
 
-If you’re using OpenAI, install the extras:
-    pip install -r requirements-llm.txt
+Example folder structure:
 
-Set your API key:
-    # PowerShell
-    $env:OPENAI_API_KEY="sk-..."
-    # bash/zsh
-    export OPENAI_API_KEY="sk-..."
+    examples/
+      2025-11-02-polish-run/
+        forensynth_summary_2025-11-02.md
+        forensynth_report_2025-11-02.html
+        evidence.csv
+        detections.json
 
-### Suggested code guard (inside your CLI init)
-Fail gracefully if OpenAI is enabled but package/env is missing.
-    import os
-    try:
-        import openai  # only when provider == "openai"
-    except ImportError:
-        raise SystemExit("OpenAI provider selected but 'openai' package not installed. Try: pip install -r requirements-llm.txt")
-    if not os.getenv("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY is not set.")
+These artifacts can be used for:
+
+- Portfolio / GitHub “Featured” items
+- LinkedIn posts
+- Walk-through blog posts
+- DFIR demos and training
 
 ---
-    
 
+# CLI Differences (v2.3.4 vs v2.3.3)
 
+New or important flags in **v2.3.4**:
 
+- `--chart-style {bar,donuts,both}`  
+  Controls visuals: classic bar heatmap, MITRE donuts, or both.
 
+- `--export-evidence-csv`  
+  Writes an `evidence.csv` appendix for further analysis.
 
+- `--limit-detections N`  
+  Hard cap on total detections fed into micro summaries.
+
+- `--sample-step N`  
+  Stratified down-sampling of detections (e.g., every 3rd).
+
+- `--max-input-tokens N`  
+  Safety guard for very large runs (protects against out-of-control token usage).
+
+View full CLI help:
+
+    python .\src\v2.3.4\forensynth_ai_v2_3_4_polish.py --help
+
+---
+
+# Project Vision
+
+ForenSynth AI started as a “vibe-coded” idea coming out of a Windows Event Logs & Finding Evil lab (HTB-style) and evolved into a working DFIR assistant:
+
+- Uses Chainsaw + Sigma as the telemetry engine
+- Uses an LLM to compress noisy detections into:
+  - Executive report
+  - Micro-cluster summaries
+  - Visual MITRE overview
+- Wraps it in:
+  - Sampling guards (cost + time)
+  - Evidence exports (CSV)
+  - Real cost transparency
+
+The project reflects a modern approach to DFIR where:
+
+- **Analyst** designs the workflow and interpretation
+- **AI** helps with pattern recognition and summarization
+- **Tools** like Chainsaw, Sysmon, and Sigma remain the primary telemetry sources
+
+ForenSynth AI is not a “push-button forensics solution.”  
+It is a **DFIR co-pilot**: it accelerates triage and reporting, but **the human analyst still makes the call.**
