@@ -1,0 +1,43 @@
+name: Build desktop beta
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feature/v2.4-evidence-beta']
+  pull_request:
+    paths: ['src/forensynth/**', 'tools/**', 'pyproject.toml', '.github/workflows/desktop.yml']
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux display test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - name: Install desktop build dependencies
+        run: python -m pip install '.[llm,desktop]'
+      - name: Windows GUI smoke check
+        if: runner.os == 'Windows'
+        run: python tools/gui_smoke.py
+      - name: Linux GUI smoke check
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python tools/gui_smoke.py
+      - name: Build desktop folder
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name ForenSynth-AI --collect-data forensynth --collect-all stix2 --collect-all jsonschema --collect-all jsonschema_specifications tools/launch_gui.py
+      - name: Hash desktop files
+        run: python tools/distribution_checksums.py dist/ForenSynth-AI
+      - name: Verify desktop files
+        run: python tools/distribution_checksums.py dist/ForenSynth-AI --verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForenSynth-AI-${{ matrix.os }}-beta
+          path: dist/ForenSynth-AI/
+          retention-days: 30
+          if-no-files-found: error

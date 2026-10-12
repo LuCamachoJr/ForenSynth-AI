@@ -9,3 +9,9 @@ dist/
 samples/**/*.evtx
 evtx/**/*.evtx
 *.evtx
+
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+*.spec
