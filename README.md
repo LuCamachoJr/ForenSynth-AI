@@ -1,224 +1,135 @@
-# ForenSynth AI — DFIR Report Synthesizer
-
-ForenSynth AI is a DFIR-focused log summarization engine that ingests **Chainsaw/Sigma detections**, groups them, and produces:
-
-- Executive summary mapped to **MITRE ATT&CK**
-- Micro-cluster summaries
-- HTML visual report (heatmap + MITRE-phase donuts)
-- CSV evidence appendix
-- Actual OpenAI usage & cost summary
-- Integrity metadata, timelines, and breakdowns
-
----
-
-# Versions (tags)
-
-- **v1.0.0** — Chainsaw Summarizer (static + 3.5)
-- **v2.0.0** — First “ForenSynth AI”
-- **v2.1.0** — Resilience & retries
-- **v2.2.0** — Dev-stream visuals (heatmap)
-- **v2.3.2** — Max Fidelity (deterministic two-pass)
-- **v2.3.3** — Visual Release (KPI cards + heatmap)
-- **v2.3.4** — **Polish: donuts + heatmap, sampling governor, CSV export, real cost calculations (current)**
-
----
-
-# Quickstart (v2.3.3 Visual)
-
-> v2.3.3 is kept as a “pure visuals” baseline.  
-> For the *latest* visuals + sampling + CSV, use **v2.3.4 Polish** (see below).
-
-## Setup
-
-Create a virtual environment and install dependencies:
-
-    python -m venv venv
-    venv\Scripts\activate  # Windows
-    pip install -r requirements.txt
-
-## Run (v2.3.3 Visual)
-
-    python .\src\v2.3.3\forensynth_ai_v2_3_3_visual.py ^
-      --input "E:\Case\detections.json" ^
-      --outdir "E:\Case\report" ^
-      --html ^
-      --integrity
-
-### Outputs (v2.3.3)
-
-- HTML report
-- Markdown summary
-- Integrity meta
-- Evidence snapshot
-
----
-
-# v2.3.4 Polish (current)
-
-`src/v2.3.4/forensynth_ai_v2_3_4_polish.py` is the newest iteration.
-
-## What’s new in v2.3.4
-
-**MITRE-mapped donut charts**
-
-- Donuts by phase:
-  - Execution
-  - Persistence
-  - Discovery
-  - Lateral Movement
-  - Defense Evasion
-  - Unmapped / Multiple
-
-**Heatmap polish**
-
-- Caption under the heatmap
-- EventID footnote (e.g., 1 = Process Create, 13 = Registry, 4104 = ScriptBlock)
-- Consistent color palette with the donuts
-
-**Sampling Governor**
-
-Designed for **2k–3k detections** so you can still get a clean, readable report:
-
-- `--limit-detections N`  
-- `--sample-step N` (stratified sampling)
-
-Example:  
-2705 detections → step 3 → 902 summarized detections → much better runtime and cost.
-
-**CSV Evidence Appendix**
-
-`--export-evidence-csv` produces a CSV with:
-
-- Rule → count → ATT&CK phase
-- Entities (users, accounts, tasks, etc.)
-- Key timestamps
-
-This is meant as a pivot table for analysts.
-
-**Real OpenAI cost**
-
-- Uses real `response.usage` token counts instead of estimates
-- Cost section now matches the OpenAI dashboard for the run
-
-**Micro-cap governor**
-
-- Caps number of micro-summaries by both detection count and token budget
-- Keeps final merge latency + cost under control while preserving coverage
-
-**Meta improvements**
-
-- “Selected micros: X / Y blocks” shown in the report
-- EventID explanation footnote near the visuals
-- More readable legends
-- Cleaner HTML structure
-
----
-
-# Running v2.3.4 Polish
-
-Typical usage on Windows:
-
-    python .\src\v2.3.4\forensynth_ai_v2_3_4_polish.py ^
-      --input "E:\Case\detections.json" ^
-      --outdir "E:\Case\polish-report" ^
-      --html ^
-      --integrity ^
-      --export-evidence-csv ^
-      --chart-style both ^
-      --limit-detections 1000 ^
-      --sample-step 3
-
-Outputs:
-
-- `forensynth_report_YYYY-MM-DD.html`
-- `forensynth_summary_YYYY-MM-DD.md`
-- `evidence.csv`
-- `meta.txt`
-- `detections.json` (input copy or reference)
-
----
-
-# Sampling Notes (POC)
-
-Example production-style POC run:
-
-- Raw detections: **2705**
-- Sampling: `step=3`, `limit-detections=1000` → **902** used for micro summaries
-- Runtime: **~5 minutes** on a Kali VM
-- Cost: **~$0.07** (gpt-5-mini + gpt-5 combo)
-
-This makes it feasible to:
-
-- Run repeatedly on lab data
-- Show to hiring managers / mentors
-- Use in HTB/DFIR write-ups without breaking the bank
-
----
-
-# Examples
-
-Example folder structure:
-
-    examples/
-      2025-11-02-polish-run/
-        forensynth_summary_2025-11-02.md
-        forensynth_report_2025-11-02.html
-        evidence.csv
-        detections.json
-
-These artifacts can be used for:
-
-- Portfolio / GitHub “Featured” items
-- LinkedIn posts
-- Walk-through blog posts
-- DFIR demos and training
-
----
-
-# CLI Differences (v2.3.4 vs v2.3.3)
-
-New or important flags in **v2.3.4**:
-
-- `--chart-style {bar,donuts,both}`  
-  Controls visuals: classic bar heatmap, MITRE donuts, or both.
-
-- `--export-evidence-csv`  
-  Writes an `evidence.csv` appendix for further analysis.
-
-- `--limit-detections N`  
-  Hard cap on total detections fed into micro summaries.
-
-- `--sample-step N`  
-  Stratified down-sampling of detections (e.g., every 3rd).
-
-- `--max-input-tokens N`  
-  Safety guard for very large runs (protects against out-of-control token usage).
-
-View full CLI help:
-
-    python .\src\v2.3.4\forensynth_ai_v2_3_4_polish.py --help
-
----
-
-# Project Vision
-
-ForenSynth AI started as a “vibe-coded” idea coming out of a Windows Event Logs & Finding Evil lab (HTB-style) and evolved into a working DFIR assistant:
-
-- Uses Chainsaw + Sigma as the telemetry engine
-- Uses an LLM to compress noisy detections into:
-  - Executive report
-  - Micro-cluster summaries
-  - Visual MITRE overview
-- Wraps it in:
-  - Sampling guards (cost + time)
-  - Evidence exports (CSV)
-  - Real cost transparency
-
-The project reflects a modern approach to DFIR where:
-
-- **Analyst** designs the workflow and interpretation
-- **AI** helps with pattern recognition and summarization
-- **Tools** like Chainsaw, Sysmon, and Sigma remain the primary telemetry sources
-
-ForenSynth AI is not a “push-button forensics solution.”  
-It is a **DFIR co-pilot**: it accelerates triage and reporting, but **the human analyst still makes the call.**
+# ForenSynth AI — Evidence-linked DFIR reporting
+
+ForenSynth AI converts Chainsaw/Sigma detections into reviewable Windows DFIR reports.
+**v2.4.0 beta** adds a versioned evidence model, source hashes, explicit coverage,
+optional structured AI findings, and minimal STIX 2.1 export.
+
+Detection matches are investigation leads. They do not establish compromise,
+malicious intent, exfiltration, or affected-system scope on their own.
+
+## Quickstart (offline; no API key)
+
+Requires Python 3.11 or later. From the repository root:
+
+```sh
+python -m venv venv
+# Windows: venv\Scripts\activate
+# Linux/macOS: source venv/bin/activate
+python -m pip install .
+forensynth --input examples/v2.4/synthetic_detections.json --outdir reports --case-id demo --environment simulation --authorized-test --html --export-evidence-csv --export-stix
+```
+
+Outputs are placed in a unique run directory:
+
+- `input.original`: unchanged input bytes.
+- `detections.json`: canonical parsed envelope; rejected input records are excluded only with explicit opt-in.
+- `evidence.json`: validated normalized events, detections, observables, findings, provenance, and coverage.
+- `report.md` and optional `report.html`.
+- Optional `evidence.csv` and `stix_bundle.json`.
+- `manifest.json`: SHA-256 hashes of run-level files (excluding itself).
+
+Original evidence remains local. The hash manifest detects later changes; it is not
+an independently signed chain-of-custody system. Keep source files and backups.
+
+## Desktop GUI (Windows / Linux)
+
+Run `forensynth-gui` after installing the package. On Linux, install `python3-tk`
+if Tkinter is absent. Browse to evidence, select exports, and create a report.
+Offline processing is the default. See [desktop setup and checksums](docs/DESKTOP.md)
+for source installation, packaged beta builds, and verification.
+
+## Hunt EVTX with Chainsaw
+
+Install [Chainsaw](https://github.com/WithSecureOpenSource/chainsaw) separately and
+obtain a Sigma ruleset and compatible mapping. Use stable collected EVTX files:
+
+```sh
+forensynth --evtx-root /path/to/evtx --rules /path/to/sigma/rules --mapping /path/to/sigma-event-logs-all.yml --outdir reports --case-id case-001 --html --export-stix
+```
+
+Chainsaw is called without a shell, using JSON file output. EVTX hashes are checked
+before and after the hunt. Ruleset Git revision and mapping hash are recorded when
+available. Real EVTX/binary integration still needs testing in your investigation environment.
+
+## Optional cloud AI
+
+```sh
+python -m pip install '.[llm]'
+# Set OPENAI_API_KEY in your environment; do not commit it.
+forensynth --input /path/to/detections.json --ai cloud --model gpt-5-mini --limit-detections 1000 --max-requests 20 --max-total-tokens 100000 --html
+```
+
+`--ai cloud` explicitly enables sending selected rule metadata, host/account fields,
+and process/script fields to OpenAI. Review your data-sharing authorization first.
+Raw event data and source file paths are excluded, but selected fields may still
+contain sensitive information. v2.4 does not promise anonymization or automatic redaction.
+
+Offline mode is the default. AI is a structured interpretation stage; there is no
+unvalidated prose merge. Each finding must cite IDs from that call's input and is
+marked `pending` analyst review. Referencing evidence is not proof that a statement
+is correct. Prompts treat telemetry as untrusted data, but this is not a guarantee
+against prompt injection. No containment, account changes, or other remediation is executed.
+
+Limits apply only to AI input. Full parsed evidence and deterministic counts are
+retained. All high/critical matches survive selection even if this exceeds the
+selection limit; request and token budgets still cap cloud calls. Remaining input
+is selected across host/rule/day strata. Process-field prompt values are truncated
+at 2,000 characters with explicit flags; oversized records may be skipped with audit details.
+Token budgeting includes schema/prompt overhead and reserved output allowance.
+It is an estimate, not a provider billing guarantee. Calls are sequential with no
+SDK retries; failed calls do not produce unchecked findings. Successful response
+usage is accumulated, including rejected outputs. Unknown pricing is reported as
+unknown. Optional `--input-rate` and `--output-rate` are USD per million tokens.
+
+## STIX and ATT&CK
+
+`--export-stix` writes Cyber-observable Objects, timestamped `observed-data`, and
+behavior/finding notes. Sigma ATT&CK tags are not independently confirmed behavior.
+Optionally provide `--attack-data /path/to/enterprise-attack.json --attack-version VERSION`
+to include corresponding ATT&CK attack-pattern objects and referenced dependencies.
+No ATT&CK objects are fabricated when the dataset is absent.
+
+Indicators are never generated automatically from observed values. Supply a reviewed
+JSON array using `--indicator-reviews reviews.json --export-stix`:
+
+```json
+[
+  {
+    "observable_ref": "observable-ID_FROM_EVIDENCE_JSON",
+    "assessment": "malicious",
+    "reviewer": "Named analyst",
+    "rationale": "Evidence supporting the malicious assessment",
+    "confidence": 80
+  }
+]
+```
+
+The review file is an analyst assertion, not authentication of reviewer identity.
+Exact-value patterns are generated, validated, and linked to supporting observations
+when timestamps exist. Simulation context is included in notes and indicator descriptions.
+
+## Validation and contributing
+
+```sh
+python -m pip install -e '.[llm,dev]'
+python -m pytest -q
+ruff check src/forensynth src/v2.4 tests
+ruff format --check src/forensynth src/v2.4 tests
+```
+
+Active v2.4 CI checks are blocking. Tests cover aggregate records, deduplicated
+events, protected selection, malformed input, missing timestamps, reference checks,
+bounded AI mocks, escaped HTML/CSV, and STIX validation. They do not establish
+real-world detection accuracy or clinical/legal forensic admissibility.
+
+[Architecture](docs/ARCHITECTURE.md) · [v2.4 review notes](docs/releases/v2.4.md) ·
+[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+## Historical versions
+
+v1.x through v2.3.4 are retained as historical snapshots. Their CLI and evidence
+formats differ from v2.4. Earlier screenshots and reports are demonstrations,
+including simulated activity, and are not verified production incident findings.
+See [v2.3.4 release notes](docs/releases/v2.3.4.md).
+
+Licensed under Apache-2.0. Third-party tools, rules, and datasets retain their own licenses.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.0 beta — evidence review and desktop GUI
+
+Versioned normalized evidence, aggregate handling, full source preservation, explicit AI coverage, offline reports, referenced structured AI findings, bounded cloud calls, and reviewed STIX 2.1 export. See [release notes](docs/releases/v2.4.md).
+
 All notable changes to **ForenSynth AI** will be documented in this file.
 
 Dates are approximate lab milestones, not formal release dates.

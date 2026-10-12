@@ -1,0 +1,138 @@
+{
+  "detections": [
+    {
+      "name": "PowerShell execution",
+      "id": "rule-1",
+      "level": "high",
+      "tags": [
+        "attack.execution",
+        "attack.t1059.001"
+      ],
+      "document": {
+        "kind": "evtx",
+        "path": "fixture.evtx",
+        "data": {
+          "Event": {
+            "System": {
+              "EventID": 1,
+              "EventRecordID": 1,
+              "Computer": "LAB01",
+              "Channel": "Microsoft-Windows-Sysmon/Operational",
+              "Provider_attributes": {
+                "Name": "Microsoft-Windows-Sysmon"
+              },
+              "TimeCreated_attributes": {
+                "SystemTime": "2026-10-12T04:00:00Z"
+              }
+            },
+            "EventData": {
+              "Image": "C:\\Windows\\powershell.exe",
+              "ProcessId": "42",
+              "CommandLine": "powershell -NoProfile",
+              "DestinationIp": "192.0.2.10",
+              "SHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "QueryName": "example.test",
+              "Url": "https://example.test/a'b"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Second rule same event",
+      "id": "rule-2",
+      "level": "medium",
+      "tags": [
+        "attack.execution"
+      ],
+      "document": {
+        "kind": "evtx",
+        "path": "fixture.evtx",
+        "data": {
+          "Event": {
+            "System": {
+              "EventID": 1,
+              "EventRecordID": 1,
+              "Computer": "LAB01",
+              "Channel": "Microsoft-Windows-Sysmon/Operational",
+              "Provider_attributes": {
+                "Name": "Microsoft-Windows-Sysmon"
+              },
+              "TimeCreated_attributes": {
+                "SystemTime": "2026-10-12T04:00:00Z"
+              }
+            },
+            "EventData": {
+              "Image": "C:\\Windows\\powershell.exe",
+              "ProcessId": "42",
+              "CommandLine": "powershell -NoProfile",
+              "DestinationIp": "192.0.2.10",
+              "SHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "QueryName": "example.test",
+              "Url": "https://example.test/a'b"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Rare service installations",
+      "id": "rule-3",
+      "level": "low",
+      "kind": "aggregate",
+      "tags": [
+        "attack.persistence",
+        "attack.privilege_escalation",
+        "attack.t1543.003"
+      ],
+      "documents": [
+        {
+          "kind": "evtx",
+          "path": "fixture.evtx",
+          "data": {
+            "Event": {
+              "System": {
+                "EventID": 7045,
+                "EventRecordID": 2,
+                "Computer": "LAB01",
+                "Channel": "Microsoft-Windows-Sysmon/Operational",
+                "Provider_attributes": {
+                  "Name": "Microsoft-Windows-Sysmon"
+                },
+                "TimeCreated_attributes": {
+                  "SystemTime": "2026-10-12T04:00:00Z"
+                }
+              },
+              "EventData": {
+                "ServiceName": "Authorized Lab Service"
+              }
+            }
+          }
+        },
+        {
+          "kind": "evtx",
+          "path": "fixture.evtx",
+          "data": {
+            "Event": {
+              "System": {
+                "EventID": 7045,
+                "EventRecordID": 3,
+                "Computer": "LAB01",
+                "Channel": "Microsoft-Windows-Sysmon/Operational",
+                "Provider_attributes": {
+                  "Name": "Microsoft-Windows-Sysmon"
+                },
+                "TimeCreated_attributes": {
+                  "SystemTime": "2026-10-12T04:00:00Z"
+                }
+              },
+              "EventData": {
+                "ServiceName": "Another Lab Service"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

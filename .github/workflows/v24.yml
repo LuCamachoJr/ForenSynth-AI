@@ -1,0 +1,29 @@
+name: v2.4 validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Tkinter for GUI mapping tests
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+      - name: Install beta and test dependencies
+        run: python -m pip install -e '.[llm,dev]'
+      - name: Check active code
+        run: |
+          ruff check src/forensynth src/v2.4 tests
+          ruff format --check src/forensynth src/v2.4 tests
+      - name: Offline behavioral and STIX tests
+        run: python -m pytest -q
+      - name: Offline CLI smoke test
+        run: forensynth --input examples/v2.4/synthetic_detections.json --outdir reports --environment simulation --authorized-test --html --export-evidence-csv --export-stix
